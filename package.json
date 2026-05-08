@@ -3,18 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "description": "Windows-first desktop focus blocker for apps and websites.",
+  "author": "Ojochegbe",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"node scripts/start-electron-dev.cjs\"",
     "build": "tsc -p tsconfig.main.json && vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
     "test": "vitest run",
-    "start": "electron .",
-    "package": "npm run build && electron-builder --win nsis portable"
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "npm run dist",
+    "dist": "npm run build && electron-builder --win nsis"
   },
   "build": {
     "appId": "com.focus.desktop",
     "productName": "Focus",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -24,10 +28,18 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ],
-      "requestedExecutionLevel": "requireAdministrator"
+      "requestedExecutionLevel": "requireAdministrator",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Focus"
     }
   },
   "dependencies": {
@@ -39,6 +51,14 @@
     "vite": "^7.1.12"
   },
   "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-deb": "^7.11.1",
+    "@electron-forge/maker-rpm": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron-forge/plugin-fuses": "^7.11.1",
+    "@electron/fuses": "^1.8.0",
     "@types/deep-eql": "^4.0.2",
     "@types/http-cache-semantics": "^4.0.4",
     "@types/node": "^24.8.1",
@@ -46,7 +66,7 @@
     "@types/react-dom": "^19.2.2",
     "concurrently": "^9.2.1",
     "electron": "^42.0.0",
-    "electron-builder": "^26.0.12",
+    "electron-builder": "^26.8.1",
     "vitest": "^3.2.4"
   },
   "overrides": {

@@ -4,3 +4,5 @@ release/
 .vite/
 *.log
 *.bak
+
+out/

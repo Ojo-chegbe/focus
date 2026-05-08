@@ -17,6 +17,7 @@ export interface AppApi {
   saveProfile(profile: Profile): Promise<AppState>;
   deleteProfile(profileId: string): Promise<AppState>;
   selectAppExecutable(): Promise<SelectedAppExecutable | undefined>;
+  listRunningApps(): Promise<SelectedAppExecutable[]>;
   saveBlockedApp(app: BlockedApp): Promise<AppState>;
   deleteBlockedApp(id: string): Promise<AppState>;
   saveBlockedSite(site: BlockedSite): Promise<AppState>;
@@ -43,7 +44,8 @@ export interface AppApi {
 export interface SelectedAppExecutable {
   displayName: string;
   executable: string;
-  path: string;
+  title?: string;
+  path?: string;
 }
 
 export const channels = {
@@ -51,6 +53,7 @@ export const channels = {
   saveProfile: "profile:save",
   deleteProfile: "profile:delete",
   selectAppExecutable: "blocked-app:select-executable",
+  listRunningApps: "blocked-app:list-running",
   saveBlockedApp: "blocked-app:save",
   deleteBlockedApp: "blocked-app:delete",
   saveBlockedSite: "blocked-site:save",

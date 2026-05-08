@@ -11,13 +11,15 @@ import {
   Download,
   FolderOpen,
   Globe,
+  LayoutGrid,
   Lock,
   Plus,
   Power,
   RefreshCcw,
   Settings,
   Shield,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 import type {
   AppState,
@@ -31,6 +33,7 @@ import type {
   UsageSummary,
   Weekday
 } from "../shared/models";
+import type { SelectedAppExecutable } from "../shared/ipc";
 import { createId, isStrictLocked, normalizeDomain } from "../shared/rules";
 import "./styles.css";
 
@@ -44,7 +47,15 @@ const weekdays: Array<{ value: Weekday; label: string }> = [
   { value: 0, label: "Sun" }
 ];
 
+type Confirmation = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => Promise<void>;
+};
+
 function App() {
+  const [view, setView] = useState<"dashboard" | "settings">("dashboard");
   const [state, setState] = useState<AppState>();
   const [summary, setSummary] = useState<UsageSummary>();
   const [status, setStatus] = useState<HelperStatus>();
@@ -53,6 +64,9 @@ function App() {
   const [appInput, setAppInput] = useState("");
   const [keywordInput, setKeywordInput] = useState("");
   const [error, setError] = useState<string>();
+  const [confirmation, setConfirmation] = useState<Confirmation>();
+  const [runningApps, setRunningApps] = useState<SelectedAppExecutable[]>([]);
+  const [showRunningApps, setShowRunningApps] = useState(false);
 
   const selectedProfile = useMemo(
     () => state?.profiles.find((profile) => profile.id === selectedProfileId) ?? state?.profiles[0],
@@ -149,6 +163,22 @@ function App() {
     if (!selectedProfile) return;
     const selectedApp = await window.focusApi.selectAppExecutable();
     if (!selectedApp) return;
+    await addSelectedApp(selectedApp);
+  }
+
+  async function showRunningAppPicker() {
+    try {
+      setShowRunningApps(true);
+      setRunningApps(await window.focusApi.listRunningApps());
+      setError(undefined);
+    } catch (runningAppsError) {
+      setRunningApps([]);
+      setError(runningAppsError instanceof Error ? runningAppsError.message : String(runningAppsError));
+    }
+  }
+
+  async function addSelectedApp(selectedApp: SelectedAppExecutable) {
+    if (!selectedProfile) return;
     const appRule: BlockedApp = {
       id: createId("app"),
       profileId: selectedProfile.id,
@@ -158,6 +188,7 @@ function App() {
       enabled: true
     };
     setState(await window.focusApi.saveBlockedApp(appRule));
+    setShowRunningApps(false);
     await refreshLight();
   }
 
@@ -173,12 +204,34 @@ function App() {
     setState(await window.focusApi.saveBlockedKeyword(keyword));
   }
 
-  async function deleteProfile() {
+  function confirmAction(confirmationRequest: Confirmation): void {
+    setConfirmation(confirmationRequest);
+  }
+
+  async function runConfirmedAction() {
+    if (!confirmation) return;
+    const action = confirmation.onConfirm;
+    setConfirmation(undefined);
+    try {
+      await action();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : String(actionError));
+    }
+  }
+
+  function deleteProfile() {
     if (!selectedProfile || state?.profiles.length === 1 || locked) return;
-    const nextState = await window.focusApi.deleteProfile(selectedProfile.id);
-    setState(nextState);
-    setSelectedProfileId(nextState.profiles[0]?.id);
-    await refreshLight();
+    confirmAction({
+      title: "Delete profile?",
+      message: `This removes "${selectedProfile.name}" and every rule, schedule, and keyword inside it.`,
+      confirmLabel: "Delete profile",
+      onConfirm: async () => {
+        const nextState = await window.focusApi.deleteProfile(selectedProfile.id);
+        setState(nextState);
+        setSelectedProfileId(nextState.profiles[0]?.id);
+        await refreshLight();
+      }
+    });
   }
 
   async function saveSettings(nextSettings: AppState["settings"]) {
@@ -186,11 +239,18 @@ function App() {
     await refreshLight();
   }
 
-  async function resetData() {
-    const nextState = await window.focusApi.deleteAllData();
-    setState(nextState);
-    setSelectedProfileId(nextState.profiles[0]?.id);
-    await refreshLight();
+  function resetData() {
+    confirmAction({
+      title: "Reset all data?",
+      message: "This deletes every profile, rule, schedule, focus session, and usage event stored by Focus.",
+      confirmLabel: "Reset data",
+      onConfirm: async () => {
+        const nextState = await window.focusApi.deleteAllData();
+        setState(nextState);
+        setSelectedProfileId(nextState.profiles[0]?.id);
+        await refreshLight();
+      }
+    });
   }
 
   async function addSchedule() {
@@ -251,6 +311,17 @@ function App() {
           ))}
         </nav>
 
+        <div className="side-nav">
+          <button className={`nav-button ${view === "dashboard" ? "active" : ""}`} onClick={() => setView("dashboard")}>
+            <LayoutGrid size={16} />
+            Dashboard
+          </button>
+          <button className={`nav-button ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")}>
+            <Settings size={16} />
+            Settings
+          </button>
+        </div>
+
         <button className="secondary wide" onClick={addProfile}>
           <Plus size={16} />
           Profile
@@ -280,49 +351,51 @@ function App() {
       </aside>
 
       <section className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Active profile</p>
-            <input
-              className="profile-name-input"
-              value={selectedProfile.name}
-              disabled={locked}
-              onChange={(event) => void saveProfile({ ...selectedProfile, name: event.target.value })}
-            />
-          </div>
-          <div className="topbar-actions">
-            <button
-              className={selectedProfile.enabled ? "primary" : "secondary"}
-              disabled={locked}
-              onClick={() => void saveProfile({ ...selectedProfile, enabled: !selectedProfile.enabled })}
-            >
-              {selectedProfile.enabled ? "Enabled" : "Disabled"}
-            </button>
-            <button className="danger icon-only" disabled={locked || state.profiles.length === 1} onClick={() => void deleteProfile()} aria-label="Delete profile">
-              <Trash2 size={16} />
-            </button>
-            <button className="secondary" onClick={() => void window.focusApi.exportData().then(downloadText)}>
-              <Download size={16} />
-              Export
-            </button>
-          </div>
-        </header>
+        {view === "dashboard" && (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Active profile</p>
+                <input
+                  className="profile-name-input"
+                  value={selectedProfile.name}
+                  disabled={locked}
+                  onChange={(event) => void saveProfile({ ...selectedProfile, name: event.target.value })}
+                />
+              </div>
+              <div className="topbar-actions">
+                <button
+                  className={selectedProfile.enabled ? "primary" : "secondary"}
+                  disabled={locked}
+                  onClick={() => void saveProfile({ ...selectedProfile, enabled: !selectedProfile.enabled })}
+                >
+                  {selectedProfile.enabled ? "Enabled" : "Disabled"}
+                </button>
+                <button className="danger icon-only" disabled={locked || state.profiles.length === 1} onClick={() => void deleteProfile()} aria-label="Delete profile">
+                  <Trash2 size={16} />
+                </button>
+                <button className="secondary" onClick={() => void window.focusApi.exportData().then(downloadText)}>
+                  <Download size={16} />
+                  Export
+                </button>
+              </div>
+            </header>
 
-        {error && <div className="error-banner">{error}</div>}
-        {status?.lastError && (
-          <div className="warning-banner">
-            Website rules could not be written to the hosts file. Run the app as administrator to enforce all-browser
-            site blocking.
-          </div>
-        )}
-        <section className="metrics-grid">
-          <Metric icon={<Clock3 size={20} />} label="Screen time today" value={formatSeconds(summary.totalSecondsToday)} />
-          <Metric icon={<Shield size={20} />} label="Blocked attempts" value={String(summary.blockedAttemptsToday)} />
-          <Metric icon={<Activity size={20} />} label="Active profiles" value={String(summary.activeProfiles.length)} />
-          <Metric icon={<Globe size={20} />} label="Blocked sites now" value={String(status?.activeRules.sites.length ?? 0)} />
-        </section>
+            {error && <div className="error-banner">{error}</div>}
+            {status?.lastError && (
+              <div className="warning-banner">
+                Website rules could not be written to the hosts file. Run the app as administrator to enforce all-browser
+                site blocking.
+              </div>
+            )}
+            <section className="metrics-grid">
+              <Metric icon={<Clock3 size={20} />} label="Screen time today" value={formatSeconds(summary.totalSecondsToday)} />
+              <Metric icon={<Shield size={20} />} label="Blocked attempts" value={String(summary.blockedAttemptsToday)} />
+              <Metric icon={<Activity size={20} />} label="Active profiles" value={String(summary.activeProfiles.length)} />
+              <Metric icon={<Globe size={20} />} label="Blocked sites now" value={String(status?.activeRules.sites.length ?? 0)} />
+            </section>
 
-        <section className="content-grid">
+            <section className="content-grid">
           <Panel title="Focus Sessions" icon={<Clock3 size={18} />}>
             <div className="quick-buttons">
               {[15, 30, 60, 120].map((minutes) => (
@@ -339,7 +412,21 @@ function App() {
               {profileSessions.map((session) => (
                 <div className="session-row" key={session.id}>
                   <span>Ends {new Date(session.endsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                  <button className="danger icon-only" onClick={() => void window.focusApi.endFocusSession(session.id).then(setState)} aria-label="End session">
+                  <button
+                    className="danger icon-only"
+                    onClick={() =>
+                      confirmAction({
+                        title: "End focus session?",
+                        message: "Blocking tied to this manual focus session will stop immediately.",
+                        confirmLabel: "End session",
+                        onConfirm: async () => {
+                          setState(await window.focusApi.endFocusSession(session.id));
+                          await refreshLight();
+                        }
+                      })
+                    }
+                    aria-label="End session"
+                  >
                     <Power size={15} />
                   </button>
                 </div>
@@ -386,7 +473,16 @@ function App() {
                 meta: site.includeSubdomains ? "Includes www subdomain" : "Exact host only",
                 enabled: site.enabled,
                 onToggle: () => void window.focusApi.saveBlockedSite({ ...site, enabled: !site.enabled }).then(setState),
-                onDelete: () => void window.focusApi.deleteBlockedSite(site.id).then(setState)
+                onDelete: () =>
+                  confirmAction({
+                    title: "Delete website rule?",
+                    message: `Remove "${site.normalizedHost}" from website blocking.`,
+                    confirmLabel: "Delete rule",
+                    onConfirm: async () => {
+                      setState(await window.focusApi.deleteBlockedSite(site.id));
+                      await refreshLight();
+                    }
+                  })
               }))}
               locked={locked}
             />
@@ -410,7 +506,33 @@ function App() {
               <button className="secondary icon-only" disabled={locked} onClick={() => void chooseApp()} aria-label="Choose app">
                 <FolderOpen size={16} />
               </button>
+              <button className="secondary" disabled={locked} onClick={() => void showRunningAppPicker()}>
+                <AppWindow size={16} />
+                Running apps
+              </button>
             </div>
+            {showRunningApps && (
+              <div className="running-app-list">
+                <div className="running-app-list-header">
+                  <strong>Running apps</strong>
+                  <button className="secondary icon-only" onClick={() => setShowRunningApps(false)} aria-label="Close running apps list">
+                    <X size={16} />
+                  </button>
+                </div>
+                {runningApps.map((runningApp) => (
+                  <button
+                    className="running-app-row"
+                    key={`${runningApp.executable}-${runningApp.path ?? runningApp.displayName}`}
+                    onClick={() => void addSelectedApp(runningApp)}
+                  >
+                    <strong>{runningApp.displayName}</strong>
+                    <span>{runningApp.executable}</span>
+                    <small>{runningApp.path || runningApp.title || "Path unavailable"}</small>
+                  </button>
+                ))}
+                {runningApps.length === 0 && <p className="empty">No visible running apps found.</p>}
+              </div>
+            )}
             <RuleTable
               empty="No blocked apps yet."
               rows={profileApps.map((appRule) => ({
@@ -419,7 +541,16 @@ function App() {
                 meta: appRule.executable,
                 enabled: appRule.enabled,
                 onToggle: () => void window.focusApi.saveBlockedApp({ ...appRule, enabled: !appRule.enabled }).then(setState),
-                onDelete: () => void window.focusApi.deleteBlockedApp(appRule.id).then(setState)
+                onDelete: () =>
+                  confirmAction({
+                    title: "Delete app rule?",
+                    message: `Remove "${appRule.displayName}" from app blocking.`,
+                    confirmLabel: "Delete rule",
+                    onConfirm: async () => {
+                      setState(await window.focusApi.deleteBlockedApp(appRule.id));
+                      await refreshLight();
+                    }
+                  })
               }))}
               locked={locked}
             />
@@ -437,7 +568,17 @@ function App() {
                   schedule={schedule}
                   locked={locked}
                   onSave={(next) => void window.focusApi.saveSchedule(next).then(setState)}
-                  onDelete={() => void window.focusApi.deleteSchedule(schedule.id).then(setState)}
+                  onDelete={() =>
+                    confirmAction({
+                      title: "Delete schedule?",
+                      message: `Remove the "${schedule.label}" schedule.`,
+                      confirmLabel: "Delete schedule",
+                      onConfirm: async () => {
+                        setState(await window.focusApi.deleteSchedule(schedule.id));
+                        await refreshLight();
+                      }
+                    })
+                  }
                 />
               ))}
               {profileSchedules.length === 0 && <p className="empty">No schedules yet.</p>}
@@ -473,7 +614,17 @@ function App() {
                   <button
                     className="danger icon-only"
                     disabled={locked}
-                    onClick={() => void window.focusApi.deleteBlockedKeyword(keyword.id).then(setState)}
+                    onClick={() =>
+                      confirmAction({
+                        title: "Delete keyword?",
+                        message: `Remove "${keyword.phrase}" from keyword blocking.`,
+                        confirmLabel: "Delete keyword",
+                        onConfirm: async () => {
+                          setState(await window.focusApi.deleteBlockedKeyword(keyword.id));
+                          await refreshLight();
+                        }
+                      })
+                    }
                     aria-label="Delete keyword"
                   >
                     <Trash2 size={16} />
@@ -500,60 +651,88 @@ function App() {
             <Timeline events={state.usageEvents.slice(0, 12)} />
           </Panel>
 
-          <Panel title="Settings" icon={<Settings size={18} />} className="span-2">
-            <div className="settings-grid">
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={state.settings.minimizeToTray}
-                  onChange={(event) => void saveSettings({ ...state.settings, minimizeToTray: event.target.checked })}
-                />
-                Minimize to tray
-              </label>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={state.settings.launchAtLogin}
-                  onChange={(event) => void saveSettings({ ...state.settings, launchAtLogin: event.target.checked })}
-                />
-                Launch at login
-              </label>
-              <label>
-                Poll seconds
-                <input
-                  type="number"
-                  min={1}
-                  max={60}
-                  value={state.settings.helperPollSeconds}
-                  onChange={(event) => void saveSettings({ ...state.settings, helperPollSeconds: Number(event.target.value) })}
-                />
-              </label>
-              <label>
-                Block page port
-                <input
-                  type="number"
-                  min={1024}
-                  max={65535}
-                  value={state.settings.blockPagePort}
-                  onChange={(event) => void saveSettings({ ...state.settings, blockPagePort: Number(event.target.value) })}
-                />
-              </label>
-            </div>
-            <div className="settings-actions">
-              <button className="secondary" onClick={() => void window.focusApi.openHostsFile()}>
-                Open hosts file
-              </button>
-              <button className="secondary" onClick={() => void window.focusApi.refreshFirefox().then(setStatus)}>
-                Refresh Firefox
-              </button>
-              <button className="danger" onClick={() => void resetData()}>
-                <Trash2 size={16} />
-                Reset data
-              </button>
-            </div>
-          </Panel>
-        </section>
+            </section>
+          </>
+        )}
+
+        {view === "settings" && (
+          <>
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">Preferences</p>
+                <h1 className="page-title">Settings</h1>
+              </div>
+              <div className="topbar-actions">
+                <button className="secondary" onClick={() => setView("dashboard")}>
+                  <LayoutGrid size={16} />
+                  Dashboard
+                </button>
+              </div>
+            </header>
+            {error && <div className="error-banner">{error}</div>}
+            <section className="content-grid">
+              <Panel title="Settings" icon={<Settings size={18} />} className="span-2">
+                <div className="settings-grid">
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={state.settings.minimizeToTray}
+                      onChange={(event) => void saveSettings({ ...state.settings, minimizeToTray: event.target.checked })}
+                    />
+                    Minimize to tray
+                  </label>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={state.settings.launchAtLogin}
+                      onChange={(event) => void saveSettings({ ...state.settings, launchAtLogin: event.target.checked })}
+                    />
+                    Launch at login
+                  </label>
+                  <label>
+                    Poll seconds
+                    <input
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={state.settings.helperPollSeconds}
+                      onChange={(event) => void saveSettings({ ...state.settings, helperPollSeconds: Number(event.target.value) })}
+                    />
+                  </label>
+                  <label>
+                    Block page port
+                    <input
+                      type="number"
+                      min={1024}
+                      max={65535}
+                      value={state.settings.blockPagePort}
+                      onChange={(event) => void saveSettings({ ...state.settings, blockPagePort: Number(event.target.value) })}
+                    />
+                  </label>
+                </div>
+                <div className="settings-actions">
+                  <button className="secondary" onClick={() => setView("dashboard")}>
+                    Back to dashboard
+                  </button>
+                  <button className="danger" onClick={() => resetData()}>
+                    <Trash2 size={16} />
+                    Reset data
+                  </button>
+                </div>
+              </Panel>
+            </section>
+          </>
+        )}
       </section>
+      {confirmation && (
+        <ConfirmationDialog
+          title={confirmation.title}
+          message={confirmation.message}
+          confirmLabel={confirmation.confirmLabel}
+          onCancel={() => setConfirmation(undefined)}
+          onConfirm={() => void runConfirmedAction()}
+        />
+      )}
     </main>
   );
 }
@@ -589,6 +768,42 @@ function Panel({
       </header>
       {children}
     </section>
+  );
+}
+
+function ConfirmationDialog({
+  title,
+  message,
+  confirmLabel,
+  onCancel,
+  onConfirm
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="confirm-backdrop" role="presentation">
+      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <div className="confirm-icon">
+          <AlertTriangle size={22} />
+        </div>
+        <div>
+          <h2 id="confirm-title">{title}</h2>
+          <p>{message}</p>
+        </div>
+        <div className="confirm-actions">
+          <button className="secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="danger" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 

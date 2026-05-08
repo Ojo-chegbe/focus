@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { AppState, UsageSummary } from "../shared/models";
-import { channels } from "../shared/ipc";
+import { channels, type SelectedAppExecutable } from "../shared/ipc";
 import { getActiveRules } from "../shared/rules";
 import { BlockPageServer } from "./blockPageServer";
 import { HostsBlocker } from "./hostsBlocker";
@@ -21,6 +21,11 @@ let isQuitting = false;
 const isDev = !app.isPackaged;
 const execFileAsync = promisify(execFile);
 const launchTaskName = "FocusDesktop";
+const shouldQuitEarly = !app.requestSingleInstanceLock();
+
+if (shouldQuitEarly) {
+  app.quit();
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -45,11 +50,20 @@ function createWindow(): void {
   }
 
   mainWindow.on("close", (event) => {
-    if (store.getState().settings.minimizeToTray && !isQuitting) {
+    if (!isQuitting) {
       event.preventDefault();
       mainWindow?.hide();
     }
   });
+}
+
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  }
+  if (mainWindow?.isMinimized()) mainWindow.restore();
+  mainWindow?.show();
+  mainWindow?.focus();
 }
 
 function createTray(): void {
@@ -58,7 +72,7 @@ function createTray(): void {
   tray.setToolTip("Focus");
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Open Focus", click: () => mainWindow?.show() },
+      { label: "Open Focus", click: () => showMainWindow() },
       { label: "Apply Rules", click: () => void applyRulesAndRecord() },
       { type: "separator" },
       {
@@ -77,6 +91,7 @@ function registerIpc(): void {
   ipcMain.handle(channels.saveProfile, async (_, profile) => saveAndApply(() => store.saveProfile(profile)));
   ipcMain.handle(channels.deleteProfile, async (_, profileId) => saveAndApply(() => store.deleteProfile(profileId)));
   ipcMain.handle(channels.selectAppExecutable, () => selectAppExecutable());
+  ipcMain.handle(channels.listRunningApps, () => listRunningApps());
   ipcMain.handle(channels.saveBlockedApp, async (_, blockedApp) => saveAndApply(() => store.saveBlockedApp(blockedApp)));
   ipcMain.handle(channels.deleteBlockedApp, async (_, id) => saveAndApply(() => store.deleteBlockedApp(id)));
   ipcMain.handle(channels.saveBlockedSite, async (_, blockedSite) => saveAndApply(() => store.saveBlockedSite(blockedSite)));
@@ -126,6 +141,85 @@ async function selectAppExecutable() {
     executable,
     path: selectedPath
   };
+}
+
+async function listRunningApps(): Promise<SelectedAppExecutable[]> {
+  if (process.platform !== "win32") return [];
+  const script = `
+Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class FocusWindowEnum {
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+"@
+$items = New-Object System.Collections.Generic.List[object]
+$callback = [FocusWindowEnum+EnumWindowsProc]{
+  param([IntPtr]$hWnd, [IntPtr]$lParam)
+  if ([FocusWindowEnum]::IsWindowVisible($hWnd)) {
+    $builder = New-Object System.Text.StringBuilder 512
+    [void][FocusWindowEnum]::GetWindowText($hWnd, $builder, $builder.Capacity)
+    $title = $builder.ToString().Trim()
+    if ($title.Length -gt 0) {
+      $processId = 0
+      [void][FocusWindowEnum]::GetWindowThreadProcessId($hWnd, [ref]$processId)
+      if ($processId -gt 0) {
+        try {
+          $process = Get-Process -Id $processId -ErrorAction Stop
+          $processPath = ""
+          try { $processPath = $process.Path } catch {}
+          if (-not $processPath) {
+            try { $processPath = $process.MainModule.FileName } catch {}
+          }
+          $items.Add([PSCustomObject]@{
+            displayName = $process.ProcessName
+            executable = "$($process.ProcessName).exe"
+            title = $title
+            path = $processPath
+          })
+        } catch {}
+      }
+    }
+  }
+  return $true
+}
+[void][FocusWindowEnum]::EnumWindows($callback, [IntPtr]::Zero)
+if ($items.Count -eq 0) {
+  Get-Process | ForEach-Object {
+    try {
+      $processPath = ""
+      try { $processPath = $_.Path } catch {}
+      if (-not $processPath) {
+        try { $processPath = $_.MainModule.FileName } catch {}
+      }
+      if ($processPath -and $processPath -notlike "$env:windir\\*") {
+        $items.Add([PSCustomObject]@{
+          displayName = $_.ProcessName
+          executable = "$($_.ProcessName).exe"
+          title = "Running process"
+          path = $processPath
+        })
+      }
+    } catch {}
+  }
+}
+$items | Sort-Object displayName, path -Unique | ConvertTo-Json -Compress
+`;
+
+  const { stdout } = await execFileAsync(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+    { windowsHide: true, timeout: 5000 }
+  );
+  const output = stdout.trim();
+  if (!output) return [];
+  const parsed = JSON.parse(output) as SelectedAppExecutable | SelectedAppExecutable[];
+  return (Array.isArray(parsed) ? parsed : [parsed]).filter((app) => app.executable);
 }
 
 async function saveAndApply(mutator: () => AppState): Promise<AppState> {
@@ -268,28 +362,31 @@ function toPowerShellSingleQuotedString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-app.whenReady().then(async () => {
-  store = new FocusStore();
-  hostsBlocker = new HostsBlocker();
-  if (!(await shouldContinueStartup())) return;
-  blockPageServer = new BlockPageServer();
-  blockPageServer.start(store.getState().settings.blockPagePort);
-  monitor = new WindowsMonitor(store, () => getActiveRules(store.getState()));
-  monitor.start(store.getState().settings.helperPollSeconds);
-  registerIpc();
-  createWindow();
-  createTray();
-  void applyRulesAndRecord();
+if (!shouldQuitEarly) {
+  app.whenReady().then(async () => {
+    store = new FocusStore();
+    hostsBlocker = new HostsBlocker();
+    if (!(await shouldContinueStartup())) return;
+    blockPageServer = new BlockPageServer();
+    blockPageServer.start(store.getState().settings.blockPagePort);
+    monitor = new WindowsMonitor(store, () => getActiveRules(store.getState()));
+    monitor.start(store.getState().settings.helperPollSeconds);
+    registerIpc();
+    createWindow();
+    createTray();
+    void applyRulesAndRecord();
+  });
+}
+
+app.on("second-instance", () => {
+  showMainWindow();
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  else mainWindow?.show();
+  showMainWindow();
 });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+app.on("window-all-closed", () => undefined);
 
 app.on("before-quit", () => {
   isQuitting = true;

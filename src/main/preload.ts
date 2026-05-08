@@ -6,6 +6,7 @@ const api: AppApi = {
   saveProfile: (profile) => ipcRenderer.invoke(channels.saveProfile, profile),
   deleteProfile: (profileId) => ipcRenderer.invoke(channels.deleteProfile, profileId),
   selectAppExecutable: () => ipcRenderer.invoke(channels.selectAppExecutable),
+  listRunningApps: () => ipcRenderer.invoke(channels.listRunningApps),
   saveBlockedApp: (app) => ipcRenderer.invoke(channels.saveBlockedApp, app),
   deleteBlockedApp: (id) => ipcRenderer.invoke(channels.deleteBlockedApp, id),
   saveBlockedSite: (site) => ipcRenderer.invoke(channels.saveBlockedSite, site),
