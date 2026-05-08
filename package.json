@@ -1,0 +1,58 @@
+{
+  "name": "focus-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows-first desktop focus blocker for apps and websites.",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"node scripts/start-electron-dev.cjs\"",
+    "build": "tsc -p tsconfig.main.json && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
+    "test": "vitest run",
+    "start": "electron .",
+    "package": "npm run build && electron-builder --win nsis portable"
+  },
+  "build": {
+    "appId": "com.focus.desktop",
+    "productName": "Focus",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "requestedExecutionLevel": "requireAdministrator"
+    }
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "lucide-react": "^0.548.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12"
+  },
+  "devDependencies": {
+    "@types/deep-eql": "^4.0.2",
+    "@types/http-cache-semantics": "^4.0.4",
+    "@types/node": "^24.8.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "concurrently": "^9.2.1",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.0.12",
+    "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "fdir": "6.4.6",
+    "magic-string": "0.30.17",
+    "std-env": "3.9.0",
+    "tinyglobby": "0.2.14"
+  }
+}

@@ -1,0 +1,75 @@
+import type {
+  ActiveRules,
+  AppState,
+  AppSettings,
+  BlockedApp,
+  BlockedKeyword,
+  BlockedSite,
+  HelperStatus,
+  Profile,
+  Schedule,
+  UsageEvent,
+  UsageSummary
+} from "./models";
+
+export interface AppApi {
+  getState(): Promise<AppState>;
+  saveProfile(profile: Profile): Promise<AppState>;
+  deleteProfile(profileId: string): Promise<AppState>;
+  selectAppExecutable(): Promise<SelectedAppExecutable | undefined>;
+  saveBlockedApp(app: BlockedApp): Promise<AppState>;
+  deleteBlockedApp(id: string): Promise<AppState>;
+  saveBlockedSite(site: BlockedSite): Promise<AppState>;
+  deleteBlockedSite(id: string): Promise<AppState>;
+  saveBlockedKeyword(keyword: BlockedKeyword): Promise<AppState>;
+  deleteBlockedKeyword(id: string): Promise<AppState>;
+  saveSchedule(schedule: Schedule): Promise<AppState>;
+  deleteSchedule(id: string): Promise<AppState>;
+  startFocusSession(profileId: string, minutes: number): Promise<AppState>;
+  endFocusSession(id: string): Promise<AppState>;
+  lockProfile(profileId: string, minutes: number): Promise<AppState>;
+  applyRules(): Promise<HelperStatus>;
+  getHelperStatus(): Promise<HelperStatus>;
+  getUsageSummary(): Promise<UsageSummary>;
+  getTimeline(): Promise<UsageEvent[]>;
+  exportData(): Promise<string>;
+  deleteAllData(): Promise<AppState>;
+  saveSettings(settings: AppSettings): Promise<AppState>;
+  openHostsFile(): Promise<void>;
+  relaunchAsAdmin(): Promise<void>;
+  refreshFirefox(): Promise<HelperStatus>;
+}
+
+export interface SelectedAppExecutable {
+  displayName: string;
+  executable: string;
+  path: string;
+}
+
+export const channels = {
+  getState: "state:get",
+  saveProfile: "profile:save",
+  deleteProfile: "profile:delete",
+  selectAppExecutable: "blocked-app:select-executable",
+  saveBlockedApp: "blocked-app:save",
+  deleteBlockedApp: "blocked-app:delete",
+  saveBlockedSite: "blocked-site:save",
+  deleteBlockedSite: "blocked-site:delete",
+  saveBlockedKeyword: "blocked-keyword:save",
+  deleteBlockedKeyword: "blocked-keyword:delete",
+  saveSchedule: "schedule:save",
+  deleteSchedule: "schedule:delete",
+  startFocusSession: "focus-session:start",
+  endFocusSession: "focus-session:end",
+  lockProfile: "profile:lock",
+  applyRules: "rules:apply",
+  getHelperStatus: "helper:status",
+  getUsageSummary: "usage:summary",
+  getTimeline: "usage:timeline",
+  exportData: "data:export",
+  deleteAllData: "data:delete-all",
+  saveSettings: "settings:save",
+  openHostsFile: "hosts:open",
+  relaunchAsAdmin: "app:relaunch-as-admin",
+  refreshFirefox: "browser:refresh-firefox"
+} as const;

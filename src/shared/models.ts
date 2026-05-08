@@ -1,0 +1,125 @@
+export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+export type RuleTarget = "app" | "site" | "keyword" | "phone";
+
+export type UsageEventType =
+  | "app-session"
+  | "site-blocked"
+  | "app-blocked"
+  | "rules-applied"
+  | "strict-locked"
+  | "strict-denied"
+  | "focus-started"
+  | "focus-ended";
+
+export interface Profile {
+  id: string;
+  name: string;
+  color: string;
+  icon: string;
+  enabled: boolean;
+  strictUntil?: string;
+  strictMode: "off" | "timer" | "challenge";
+  createdAt: string;
+}
+
+export interface BlockedApp {
+  id: string;
+  profileId: string;
+  displayName: string;
+  executable: string;
+  path?: string;
+  enabled: boolean;
+  dailyLimitMinutes?: number;
+  launchLimit?: number;
+}
+
+export interface BlockedSite {
+  id: string;
+  profileId: string;
+  domain: string;
+  normalizedHost: string;
+  includeSubdomains: boolean;
+  enabled: boolean;
+  dailyLimitMinutes?: number;
+}
+
+export interface BlockedKeyword {
+  id: string;
+  profileId: string;
+  phrase: string;
+  enabled: boolean;
+}
+
+export interface Schedule {
+  id: string;
+  profileId: string;
+  label: string;
+  days: Weekday[];
+  startTime: string;
+  endTime: string;
+  enabled: boolean;
+}
+
+export interface FocusSession {
+  id: string;
+  profileId: string;
+  startedAt: string;
+  endsAt: string;
+  active: boolean;
+}
+
+export interface UsageEvent {
+  id: string;
+  type: UsageEventType;
+  target: string;
+  profileId?: string;
+  startedAt: string;
+  endedAt?: string;
+  durationSeconds?: number;
+  detail?: string;
+}
+
+export interface AppSettings {
+  launchAtLogin: boolean;
+  minimizeToTray: boolean;
+  blockPagePort: number;
+  helperPollSeconds: number;
+  emergencyOverrideMinutes: number;
+}
+
+export interface AppState {
+  profiles: Profile[];
+  blockedApps: BlockedApp[];
+  blockedSites: BlockedSite[];
+  blockedKeywords: BlockedKeyword[];
+  schedules: Schedule[];
+  focusSessions: FocusSession[];
+  usageEvents: UsageEvent[];
+  settings: AppSettings;
+}
+
+export interface ActiveRules {
+  activeProfileIds: string[];
+  activeProfileNames: string[];
+  apps: BlockedApp[];
+  sites: BlockedSite[];
+  keywords: BlockedKeyword[];
+}
+
+export interface HelperStatus {
+  platform: NodeJS.Platform;
+  isWindows: boolean;
+  isElevated: boolean;
+  hostsPath: string;
+  lastAppliedAt?: string;
+  lastError?: string;
+  activeRules: ActiveRules;
+}
+
+export interface UsageSummary {
+  totalSecondsToday: number;
+  blockedAttemptsToday: number;
+  activeProfiles: string[];
+  topApps: Array<{ name: string; seconds: number }>;
+}
