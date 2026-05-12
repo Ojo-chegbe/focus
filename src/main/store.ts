@@ -4,8 +4,8 @@ import path from "node:path";
 import type {
   AppSettings,
   AppState,
+  AllowedApp,
   BlockedApp,
-  BlockedKeyword,
   BlockedSite,
   FocusSession,
   Profile,
@@ -41,6 +41,7 @@ function defaultState(): AppState {
         color: "#2563eb",
         icon: "briefcase",
         enabled: true,
+        appPolicy: "blocklist",
         strictMode: "off",
         createdAt: nowIso()
       }
@@ -54,6 +55,7 @@ function defaultState(): AppState {
         enabled: false
       }
     ],
+    allowedApps: [],
     blockedSites: [
       {
         id: createId("site"),
@@ -64,7 +66,6 @@ function defaultState(): AppState {
         enabled: false
       }
     ],
-    blockedKeywords: [],
     schedules: [
       {
         id: createId("schedule"),
@@ -136,6 +137,7 @@ export class FocusStore {
     this.upsert("profiles", {
       ...profile,
       name: profile.name.trim() || "Untitled profile",
+      appPolicy: profile.appPolicy ?? "blocklist",
       strictMode: profile.strictMode ?? "off",
       createdAt: profile.createdAt || nowIso()
     });
@@ -148,8 +150,8 @@ export class FocusStore {
 
     this.state.profiles = this.state.profiles.filter((item) => item.id !== profileId);
     this.state.blockedApps = this.state.blockedApps.filter((item) => item.profileId !== profileId);
+    this.state.allowedApps = this.state.allowedApps.filter((item) => item.profileId !== profileId);
     this.state.blockedSites = this.state.blockedSites.filter((item) => item.profileId !== profileId);
-    this.state.blockedKeywords = this.state.blockedKeywords.filter((item) => item.profileId !== profileId);
     this.state.schedules = this.state.schedules.filter((item) => item.profileId !== profileId);
     this.persist();
     return this.getState();
@@ -170,6 +172,21 @@ export class FocusStore {
     return this.getState();
   }
 
+  saveAllowedApp(allowedApp: AllowedApp): AppState {
+    if (this.isProfileLocked(allowedApp.profileId)) return this.getState();
+    this.upsert("allowedApps", {
+      ...allowedApp,
+      displayName: allowedApp.displayName.trim() || allowedApp.executable.trim(),
+      executable: allowedApp.executable.trim().toLowerCase()
+    });
+    return this.getState();
+  }
+
+  deleteAllowedApp(id: string): AppState {
+    this.deleteById("allowedApps", id);
+    return this.getState();
+  }
+
   saveBlockedSite(blockedSite: BlockedSite): AppState {
     if (this.isProfileLocked(blockedSite.profileId)) return this.getState();
     const normalizedHost = normalizeDomain(blockedSite.domain || blockedSite.normalizedHost);
@@ -184,17 +201,6 @@ export class FocusStore {
 
   deleteBlockedSite(id: string): AppState {
     this.deleteById("blockedSites", id);
-    return this.getState();
-  }
-
-  saveBlockedKeyword(keyword: BlockedKeyword): AppState {
-    if (this.isProfileLocked(keyword.profileId)) return this.getState();
-    this.upsert("blockedKeywords", { ...keyword, phrase: keyword.phrase.trim() });
-    return this.getState();
-  }
-
-  deleteBlockedKeyword(id: string): AppState {
-    this.deleteById("blockedKeywords", id);
     return this.getState();
   }
 
@@ -259,12 +265,24 @@ export class FocusStore {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.dataPath, "utf8")) as Partial<AppState>;
       return {
-        profiles: parsed.profiles ?? [],
+        profiles: (parsed.profiles ?? []).map((profile) => ({
+          ...profile,
+          appPolicy: profile.appPolicy ?? "blocklist"
+        })),
         blockedApps: parsed.blockedApps ?? [],
+        allowedApps: parsed.allowedApps ?? [],
         blockedSites: parsed.blockedSites ?? [],
-        blockedKeywords: parsed.blockedKeywords ?? [],
-        schedules: parsed.schedules ?? [],
-        focusSessions: parsed.focusSessions ?? [],
+        schedules: (parsed.schedules ?? []).map((schedule) => ({
+          ...schedule,
+          days: Array.isArray(schedule.days) ? schedule.days : [],
+          startTime: typeof schedule.startTime === "string" ? schedule.startTime : "09:00",
+          endTime: typeof schedule.endTime === "string" ? schedule.endTime : "17:00",
+          enabled: Boolean(schedule.enabled)
+        })),
+        focusSessions: (parsed.focusSessions ?? []).map((session) => ({
+          ...session,
+          active: Boolean(session.active)
+        })),
         usageEvents: parsed.usageEvents ?? [],
         settings: { ...defaultSettings(), ...(parsed.settings ?? {}) }
       };
@@ -279,7 +297,7 @@ export class FocusStore {
     fs.writeFileSync(this.dataPath, JSON.stringify(this.state, null, 2), "utf8");
   }
 
-  private upsert<K extends "profiles" | "blockedApps" | "blockedSites" | "blockedKeywords" | "schedules">(
+  private upsert<K extends "profiles" | "blockedApps" | "allowedApps" | "blockedSites" | "schedules">(
     collection: K,
     value: AppState[K][number]
   ): void {
@@ -290,7 +308,7 @@ export class FocusStore {
     this.persist();
   }
 
-  private deleteById<K extends "blockedApps" | "blockedSites" | "blockedKeywords" | "schedules">(
+  private deleteById<K extends "blockedApps" | "allowedApps" | "blockedSites" | "schedules">(
     collection: K,
     id: string
   ): void {

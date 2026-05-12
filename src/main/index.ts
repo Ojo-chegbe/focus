@@ -16,6 +16,7 @@ let store: FocusStore;
 let hostsBlocker: HostsBlocker;
 let blockPageServer: BlockPageServer;
 let monitor: WindowsMonitor;
+let rulesRefreshTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
 
 const isDev = !app.isPackaged;
@@ -94,10 +95,10 @@ function registerIpc(): void {
   ipcMain.handle(channels.listRunningApps, () => listRunningApps());
   ipcMain.handle(channels.saveBlockedApp, async (_, blockedApp) => saveAndApply(() => store.saveBlockedApp(blockedApp)));
   ipcMain.handle(channels.deleteBlockedApp, async (_, id) => saveAndApply(() => store.deleteBlockedApp(id)));
+  ipcMain.handle(channels.saveAllowedApp, async (_, allowedApp) => saveAndApply(() => store.saveAllowedApp(allowedApp)));
+  ipcMain.handle(channels.deleteAllowedApp, async (_, id) => saveAndApply(() => store.deleteAllowedApp(id)));
   ipcMain.handle(channels.saveBlockedSite, async (_, blockedSite) => saveAndApply(() => store.saveBlockedSite(blockedSite)));
   ipcMain.handle(channels.deleteBlockedSite, async (_, id) => saveAndApply(() => store.deleteBlockedSite(id)));
-  ipcMain.handle(channels.saveBlockedKeyword, async (_, keyword) => saveAndApply(() => store.saveBlockedKeyword(keyword)));
-  ipcMain.handle(channels.deleteBlockedKeyword, async (_, id) => saveAndApply(() => store.deleteBlockedKeyword(id)));
   ipcMain.handle(channels.saveSchedule, async (_, schedule) => saveAndApply(() => store.saveSchedule(schedule)));
   ipcMain.handle(channels.deleteSchedule, async (_, id) => saveAndApply(() => store.deleteSchedule(id)));
   ipcMain.handle(channels.startFocusSession, async (_, profileId, minutes) =>
@@ -114,6 +115,7 @@ function registerIpc(): void {
   ipcMain.handle(channels.saveSettings, async (_, settings) => {
     const nextState = store.saveSettings(settings);
     await configureLaunchAtLogin(nextState.settings.launchAtLogin);
+    restartRuntimeServices(nextState);
     await applyRulesAndRecord();
     return nextState;
   });
@@ -247,6 +249,17 @@ async function applyRulesAndRecord() {
   return hostsBlocker.getStatus(activeRules);
 }
 
+function restartRuntimeServices(state: AppState): void {
+  monitor?.stop();
+  monitor?.start(state.settings.helperPollSeconds);
+
+  blockPageServer?.stop();
+  blockPageServer?.start(state.settings.blockPagePort);
+
+  if (rulesRefreshTimer) clearInterval(rulesRefreshTimer);
+  rulesRefreshTimer = setInterval(() => void applyRulesAndRecord(), 15_000);
+}
+
 async function configureLaunchAtLogin(openAtLogin: boolean): Promise<void> {
   if (process.platform !== "win32") {
     app.setLoginItemSettings({ openAtLogin });
@@ -371,6 +384,7 @@ if (!shouldQuitEarly) {
     blockPageServer.start(store.getState().settings.blockPagePort);
     monitor = new WindowsMonitor(store, () => getActiveRules(store.getState()));
     monitor.start(store.getState().settings.helperPollSeconds);
+    rulesRefreshTimer = setInterval(() => void applyRulesAndRecord(), 15_000);
     registerIpc();
     createWindow();
     createTray();
@@ -390,6 +404,7 @@ app.on("window-all-closed", () => undefined);
 
 app.on("before-quit", () => {
   isQuitting = true;
+  if (rulesRefreshTimer) clearInterval(rulesRefreshTimer);
   monitor?.stop();
   blockPageServer?.stop();
 });

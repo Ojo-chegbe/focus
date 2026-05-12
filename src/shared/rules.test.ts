@@ -50,6 +50,7 @@ describe("getActiveRules", () => {
           color: "#000",
           icon: "briefcase",
           enabled: true,
+          appPolicy: "blocklist",
           strictMode: "off",
           createdAt: "2026-05-01T00:00:00.000Z"
         }
@@ -57,6 +58,7 @@ describe("getActiveRules", () => {
       blockedApps: [
         { id: "a1", profileId: "p1", displayName: "Discord", executable: "discord.exe", enabled: true }
       ],
+      allowedApps: [],
       blockedSites: [
         {
           id: "w1",
@@ -67,7 +69,6 @@ describe("getActiveRules", () => {
           enabled: true
         }
       ],
-      blockedKeywords: [],
       schedules: [],
       focusSessions: [],
       usageEvents: [],
@@ -95,13 +96,14 @@ describe("getActiveRules", () => {
           color: "#000",
           icon: "briefcase",
           enabled: false,
+          appPolicy: "blocklist",
           strictMode: "off",
           createdAt: "2026-05-01T00:00:00.000Z"
         }
       ],
       blockedApps: [{ id: "a1", profileId: "p1", displayName: "Discord", executable: "discord.exe", enabled: true }],
+      allowedApps: [],
       blockedSites: [],
-      blockedKeywords: [],
       schedules: [
         {
           id: "s1",
@@ -136,4 +138,181 @@ describe("getActiveRules", () => {
     expect(active.activeProfileNames).toEqual([]);
     expect(active.apps).toHaveLength(0);
   });
+
+  it("activates a profile only during active schedule windows when schedules exist", () => {
+    const state: AppState = {
+      profiles: [
+        {
+          id: "p1",
+          name: "Work",
+          color: "#000",
+          icon: "briefcase",
+          enabled: true,
+          appPolicy: "blocklist",
+          strictMode: "off",
+          createdAt: "2026-05-01T00:00:00.000Z"
+        }
+      ],
+      blockedApps: [{ id: "a1", profileId: "p1", displayName: "Discord", executable: "discord.exe", enabled: true }],
+      allowedApps: [],
+      blockedSites: [],
+      schedules: [
+        {
+          id: "s1",
+          profileId: "p1",
+          label: "Work hours",
+          days: [1],
+          startTime: "09:00",
+          endTime: "17:00",
+          enabled: true
+        }
+      ],
+      focusSessions: [],
+      usageEvents: [],
+      settings: {
+        launchAtLogin: false,
+        minimizeToTray: true,
+        blockPagePort: 47831,
+        helperPollSeconds: 5,
+        emergencyOverrideMinutes: 10
+      }
+    };
+
+    expect(getActiveRules(state, new Date("2026-05-04T10:00:00")).activeProfileNames).toEqual(["Work"]);
+    expect(getActiveRules(state, new Date("2026-05-04T18:00:00")).activeProfileNames).toEqual([]);
+  });
+
+  it("activates a profile while an active focus session exists even if no schedule is active", () => {
+    const state: AppState = {
+      profiles: [
+        {
+          id: "p1",
+          name: "Work",
+          color: "#000",
+          icon: "briefcase",
+          enabled: true,
+          appPolicy: "blocklist",
+          strictMode: "off",
+          createdAt: "2026-05-01T00:00:00.000Z"
+        }
+      ],
+      blockedApps: [{ id: "a1", profileId: "p1", displayName: "Discord", executable: "discord.exe", enabled: true }],
+      allowedApps: [],
+      blockedSites: [],
+      schedules: [
+        {
+          id: "s1",
+          profileId: "p1",
+          label: "Work hours",
+          days: [1],
+          startTime: "09:00",
+          endTime: "17:00",
+          enabled: true
+        }
+      ],
+      focusSessions: [
+        {
+          id: "f1",
+          profileId: "p1",
+          startedAt: "2026-05-04T18:00:00.000Z",
+          endsAt: "2026-05-04T19:00:00.000Z",
+          active: true
+        }
+      ],
+      usageEvents: [],
+      settings: {
+        launchAtLogin: false,
+        minimizeToTray: true,
+        blockPagePort: 47831,
+        helperPollSeconds: 5,
+        emergencyOverrideMinutes: 10
+      }
+    };
+
+    expect(getActiveRules(state, new Date("2026-05-04T18:30:00")).activeProfileNames).toEqual(["Work"]);
+  });
+
+  it("keeps profile manually active when all schedules are disabled", () => {
+    const state: AppState = {
+      profiles: [
+        {
+          id: "p1",
+          name: "Work",
+          color: "#000",
+          icon: "briefcase",
+          enabled: true,
+          appPolicy: "blocklist",
+          strictMode: "off",
+          createdAt: "2026-05-01T00:00:00.000Z"
+        }
+      ],
+      blockedApps: [{ id: "a1", profileId: "p1", displayName: "Discord", executable: "discord.exe", enabled: true }],
+      allowedApps: [],
+      blockedSites: [],
+      schedules: [
+        {
+          id: "s1",
+          profileId: "p1",
+          label: "Work hours",
+          days: [1],
+          startTime: "09:00",
+          endTime: "17:00",
+          enabled: false
+        }
+      ],
+      focusSessions: [],
+      usageEvents: [],
+      settings: {
+        launchAtLogin: false,
+        minimizeToTray: true,
+        blockPagePort: 47831,
+        helperPollSeconds: 5,
+        emergencyOverrideMinutes: 10
+      }
+    };
+
+    expect(getActiveRules(state, new Date("2026-05-04T18:30:00")).activeProfileNames).toEqual(["Work"]);
+  });
+
+  it("returns enabled allowed apps for active allowlist profiles", () => {
+    const state: AppState = {
+      profiles: [
+        {
+          id: "p1",
+          name: "Deep Work",
+          color: "#000",
+          icon: "target",
+          enabled: true,
+          appPolicy: "allowlist",
+          strictMode: "off",
+          createdAt: "2026-05-01T00:00:00.000Z"
+        }
+      ],
+      blockedApps: [{ id: "a1", profileId: "p1", displayName: "Discord", executable: "discord.exe", enabled: true }],
+      allowedApps: [
+        { id: "aa1", profileId: "p1", displayName: "VS Code", executable: "code.exe", enabled: true },
+        { id: "aa2", profileId: "p1", displayName: "Browser", executable: "browser.exe", enabled: false }
+      ],
+      blockedSites: [],
+      schedules: [],
+      focusSessions: [],
+      usageEvents: [],
+      settings: {
+        launchAtLogin: false,
+        minimizeToTray: true,
+        blockPagePort: 47831,
+        helperPollSeconds: 5,
+        emergencyOverrideMinutes: 10
+      }
+    };
+
+    const active = getActiveRules(state, new Date("2026-05-04T18:30:00"));
+    expect(active.appPoliciesByProfileId).toEqual({ p1: "allowlist" });
+    expect(active.allowedApps.map((app) => app.executable)).toEqual(["code.exe"]);
+    expect(active.blockedApps.map((app) => app.executable)).toEqual(["discord.exe"]);
+  });
 });
+
+
+
+

@@ -249,6 +249,13 @@ input:focus-visible {
   font-weight: 800;
 }
 
+.profile-activation-state {
+  margin: 8px 0 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .topbar-actions,
 .quick-buttons,
 .entry-row,
@@ -356,6 +363,28 @@ input:focus-visible {
   background: #ffffff;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
   animation: pop-in 180ms var(--easing);
+}
+
+.profile-dialog {
+  width: min(560px, 100%);
+  grid-template-columns: 1fr;
+  border-color: var(--line);
+}
+
+.profile-dialog label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.profile-dialog input {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  padding: 0 12px;
 }
 
 .confirm-icon {
@@ -478,7 +507,6 @@ input:focus-visible {
 .running-app-list,
 .schedule-list,
 .session-list,
-.keyword-list,
 .timeline,
 .bar-list {
   display: grid;
@@ -626,13 +654,43 @@ input:focus-visible {
   margin-top: 4px;
 }
 
+.mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mode-card {
+  min-height: 96px;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #dbe5f3;
+  border-radius: var(--radius-s);
+  background: #ffffff;
+  color: var(--text);
+  text-align: left;
+}
+
+.mode-card.active {
+  border-color: var(--primary);
+  background: #edf5ff;
+  box-shadow: 0 0 0 3px rgba(10, 102, 255, 0.12);
+}
+
+.mode-card span {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.keyword-row,
 .session-row {
   min-height: 42px;
   display: grid;
@@ -644,10 +702,6 @@ input:focus-visible {
   background: #ffffff;
 }
 
-.keyword-row {
-  grid-template-columns: 1fr 64px 38px;
-}
-
 .session-row {
   grid-template-columns: 1fr 38px;
 }
@@ -656,23 +710,6 @@ input:focus-visible {
   color: var(--text-soft);
   font-weight: 700;
   font-size: 13px;
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: #e9f0ff;
-  color: #2f4f88;
-  font-weight: 700;
-  font-size: 13px;
-}
-
-.muted-chip {
-  background: #f1f5fa;
-  color: var(--text-faint);
 }
 
 .settings-grid {

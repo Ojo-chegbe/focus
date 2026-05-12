@@ -1,6 +1,7 @@
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
-export type RuleTarget = "app" | "site" | "keyword" | "phone";
+export type RuleTarget = "app" | "site" | "phone";
+export type AppPolicy = "blocklist" | "allowlist";
 
 export type UsageEventType =
   | "app-session"
@@ -18,6 +19,7 @@ export interface Profile {
   color: string;
   icon: string;
   enabled: boolean;
+  appPolicy: AppPolicy;
   strictUntil?: string;
   strictMode: "off" | "timer" | "challenge";
   createdAt: string;
@@ -34,6 +36,15 @@ export interface BlockedApp {
   launchLimit?: number;
 }
 
+export interface AllowedApp {
+  id: string;
+  profileId: string;
+  displayName: string;
+  executable: string;
+  path?: string;
+  enabled: boolean;
+}
+
 export interface BlockedSite {
   id: string;
   profileId: string;
@@ -42,13 +53,6 @@ export interface BlockedSite {
   includeSubdomains: boolean;
   enabled: boolean;
   dailyLimitMinutes?: number;
-}
-
-export interface BlockedKeyword {
-  id: string;
-  profileId: string;
-  phrase: string;
-  enabled: boolean;
 }
 
 export interface Schedule {
@@ -91,8 +95,8 @@ export interface AppSettings {
 export interface AppState {
   profiles: Profile[];
   blockedApps: BlockedApp[];
+  allowedApps: AllowedApp[];
   blockedSites: BlockedSite[];
-  blockedKeywords: BlockedKeyword[];
   schedules: Schedule[];
   focusSessions: FocusSession[];
   usageEvents: UsageEvent[];
@@ -102,9 +106,12 @@ export interface AppState {
 export interface ActiveRules {
   activeProfileIds: string[];
   activeProfileNames: string[];
+  activationReasonsByProfileId: Record<string, "manual" | "schedule" | "focus-session">;
+  appPoliciesByProfileId: Record<string, AppPolicy>;
+  blockedApps: BlockedApp[];
+  allowedApps: AllowedApp[];
   apps: BlockedApp[];
   sites: BlockedSite[];
-  keywords: BlockedKeyword[];
 }
 
 export interface HelperStatus {

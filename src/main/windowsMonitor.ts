@@ -1,7 +1,7 @@
 import { BrowserWindow } from "electron";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { ActiveRules, BlockedApp } from "../shared/models";
+import type { ActiveRules, AllowedApp, BlockedApp } from "../shared/models";
 import type { FocusStore } from "./store";
 
 const execFileAsync = promisify(execFile);
@@ -22,6 +22,7 @@ if ($foregroundProcessId -gt 0) {
   $p = Get-Process -Id $foregroundProcessId -ErrorAction SilentlyContinue
   if ($p) {
     [PSCustomObject]@{
+      processId = $foregroundProcessId
       executable = "$($p.ProcessName).exe"
       title = "$($p.MainWindowTitle)"
       path = "$($p.Path)"
@@ -85,29 +86,37 @@ export class WindowsMonitor {
     }
     this.lastExecutable = executable;
 
-    const blocked = this.getRules().apps.find((app) => matchesBlockedApp(app, current));
+    const rules = this.getRules();
+    const hasAllowlistMode = Object.values(rules.appPoliciesByProfileId).includes("allowlist");
+    const blocked = hasAllowlistMode
+      ? findAllowlistViolation(rules, current)
+      : rules.blockedApps.find((app) => matchesAppRule(app, current));
+
     if (blocked) {
       this.store.addUsageEvent({
         type: "app-blocked",
         target: blocked.displayName,
         profileId: blocked.profileId,
-        detail: current.title || current.executable
+        detail: hasAllowlistMode
+          ? `${current.title || current.executable} is not in the active allowlist.`
+          : current.title || current.executable
       });
-      await this.closeBlockedProcess(current.executable, blocked.displayName);
+      await this.closeBlockedProcess(current.processId, current.executable, blocked.displayName);
       this.showBlockedWindow(blocked.displayName);
     } else {
       this.hideBlockedWindow();
     }
   }
 
-  private async closeBlockedProcess(executable: string, displayName: string): Promise<void> {
+  private async closeBlockedProcess(processId: number, executable: string, displayName: string): Promise<void> {
     const now = Date.now();
-    const lastKillAt = this.lastKillByExecutable.get(executable) ?? 0;
+    const killKey = `${executable}:${processId}`;
+    const lastKillAt = this.lastKillByExecutable.get(killKey) ?? 0;
     if (now - lastKillAt < 5000) return;
-    this.lastKillByExecutable.set(executable, now);
+    this.lastKillByExecutable.set(killKey, now);
 
     try {
-      await execFileAsync("taskkill.exe", ["/IM", executable, "/F"], { windowsHide: true, timeout: 3000 });
+      await execFileAsync("taskkill.exe", ["/PID", String(processId), "/F"], { windowsHide: true, timeout: 3000 });
     } catch (error) {
       this.store.addUsageEvent({
         type: "app-blocked",
@@ -156,7 +165,7 @@ export class WindowsMonitor {
 }
 
 type ForegroundProcess =
-  | { executable: string; title: string; path?: string; error?: undefined }
+  | { processId: number; executable: string; title: string; path?: string; error?: undefined }
   | { error: string; executable?: undefined; title?: undefined; path?: undefined };
 
 async function getForegroundProcess(): Promise<ForegroundProcess | undefined> {
@@ -168,9 +177,12 @@ async function getForegroundProcess(): Promise<ForegroundProcess | undefined> {
     );
     const output = stdout.trim();
     if (!output) return undefined;
-    const parsed = JSON.parse(output) as { executable?: string; title?: string; path?: string };
+    const parsed = JSON.parse(output) as { processId?: number; executable?: string; title?: string; path?: string };
     if (!parsed.executable) return undefined;
+    const processId = Number(parsed.processId);
+    if (!Number.isFinite(processId) || processId <= 0) return undefined;
     return {
+      processId,
       executable: parsed.executable,
       title: parsed.title ?? "",
       path: parsed.path || undefined
@@ -180,19 +192,85 @@ async function getForegroundProcess(): Promise<ForegroundProcess | undefined> {
   }
 }
 
-function matchesBlockedApp(app: BlockedApp, current: { executable: string; title: string; path?: string }): boolean {
+type AppRule = BlockedApp | AllowedApp;
+
+function findAllowlistViolation(
+  rules: ActiveRules,
+  current: { executable: string; title: string; path?: string }
+): BlockedApp | undefined {
+  if (isProtectedProcess(current)) return undefined;
+  const activeAllowlistProfileIds = Object.entries(rules.appPoliciesByProfileId)
+    .filter(([, policy]) => policy === "allowlist")
+    .map(([profileId]) => profileId);
+  if (activeAllowlistProfileIds.length === 0) return undefined;
+  const hasAllowRules = rules.allowedApps.some((app) => activeAllowlistProfileIds.includes(app.profileId));
+  if (!hasAllowRules) return undefined;
+  if (rules.allowedApps.some((app) => matchesAppRule(app, current))) return undefined;
+
+  const allowlistProfileId = activeAllowlistProfileIds[0];
+  return {
+    id: "allowlist-violation",
+    profileId: allowlistProfileId ?? rules.activeProfileIds[0] ?? "",
+    displayName: current.executable,
+    executable: current.executable,
+    path: current.path,
+    enabled: true
+  };
+}
+
+function matchesAppRule(app: AppRule, current: { executable: string; title: string; path?: string }): boolean {
   const executable = current.executable.toLowerCase();
   const title = current.title.toLowerCase();
   const currentPath = current.path?.toLowerCase();
-  const blockedExecutable = app.executable.toLowerCase();
-  const blockedPath = app.path?.toLowerCase();
+  const ruleExecutable = app.executable.toLowerCase();
+  const rulePath = app.path?.toLowerCase();
   const displayName = app.displayName.toLowerCase().replace(/\.exe$/i, "").trim();
 
   return (
-    executable === blockedExecutable ||
-    Boolean(blockedPath && currentPath === blockedPath) ||
+    executable === ruleExecutable ||
+    Boolean(rulePath && currentPath === rulePath) ||
     Boolean(displayName && (executable.replace(/\.exe$/i, "") === displayName || title.includes(displayName)))
   );
+}
+
+function isProtectedProcess(current: { executable: string; path?: string }): boolean {
+  const executable = current.executable.toLowerCase();
+  const protectedExecutables = new Set([
+    "applicationframehost.exe",
+    "cmd.exe",
+    "conhost.exe",
+    "csrss.exe",
+    "ctfmon.exe",
+    "dwm.exe",
+    "electron.exe",
+    "explorer.exe",
+    "focus.exe",
+    "focusdesktop.exe",
+    "lockapp.exe",
+    "logonui.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "runtimebroker.exe",
+    "securityhealthsystray.exe",
+    "services.exe",
+    "sihost.exe",
+    "smss.exe",
+    "startmenuexperiencehost.exe",
+    "svchost.exe",
+    "system",
+    "systemsettings.exe",
+    "taskhostw.exe",
+    "taskmgr.exe",
+    "userinit.exe",
+    "wininit.exe",
+    "winlogon.exe",
+    "wscript.exe"
+  ]);
+
+  if (protectedExecutables.has(executable)) return true;
+  const currentExecutable = process.execPath.split(/[\\/]/).pop()?.toLowerCase();
+  if (currentExecutable && executable === currentExecutable) return true;
+  return Boolean(current.path && process.execPath.toLowerCase() === current.path.toLowerCase());
 }
 
 function escapeHtml(value: string): string {

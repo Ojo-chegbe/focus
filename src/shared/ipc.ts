@@ -2,8 +2,8 @@ import type {
   ActiveRules,
   AppState,
   AppSettings,
+  AllowedApp,
   BlockedApp,
-  BlockedKeyword,
   BlockedSite,
   HelperStatus,
   Profile,
@@ -20,10 +20,10 @@ export interface AppApi {
   listRunningApps(): Promise<SelectedAppExecutable[]>;
   saveBlockedApp(app: BlockedApp): Promise<AppState>;
   deleteBlockedApp(id: string): Promise<AppState>;
+  saveAllowedApp(app: AllowedApp): Promise<AppState>;
+  deleteAllowedApp(id: string): Promise<AppState>;
   saveBlockedSite(site: BlockedSite): Promise<AppState>;
   deleteBlockedSite(id: string): Promise<AppState>;
-  saveBlockedKeyword(keyword: BlockedKeyword): Promise<AppState>;
-  deleteBlockedKeyword(id: string): Promise<AppState>;
   saveSchedule(schedule: Schedule): Promise<AppState>;
   deleteSchedule(id: string): Promise<AppState>;
   startFocusSession(profileId: string, minutes: number): Promise<AppState>;
@@ -56,10 +56,10 @@ export const channels = {
   listRunningApps: "blocked-app:list-running",
   saveBlockedApp: "blocked-app:save",
   deleteBlockedApp: "blocked-app:delete",
+  saveAllowedApp: "allowed-app:save",
+  deleteAllowedApp: "allowed-app:delete",
   saveBlockedSite: "blocked-site:save",
   deleteBlockedSite: "blocked-site:delete",
-  saveBlockedKeyword: "blocked-keyword:save",
-  deleteBlockedKeyword: "blocked-keyword:delete",
   saveSchedule: "schedule:save",
   deleteSchedule: "schedule:delete",
   startFocusSession: "focus-session:start",

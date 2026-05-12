@@ -7,8 +7,11 @@ describe("HostsBlocker", () => {
     const entries = blocker.buildHostsEntries({
       activeProfileIds: ["p1"],
       activeProfileNames: ["Work"],
+      activationReasonsByProfileId: { p1: "manual" },
+      appPoliciesByProfileId: { p1: "blocklist" },
+      blockedApps: [],
+      allowedApps: [],
       apps: [],
-      keywords: [],
       sites: [
         {
           id: "s1",

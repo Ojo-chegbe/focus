@@ -14,5 +14,5 @@ npm.cmd run dev
 ## Important Windows Notes
 
 - Website blocking edits `C:\Windows\System32\drivers\etc\hosts`, so run the app as administrator when applying real site blocks.
-- Hosts-file blocking works across browsers, but it cannot inspect HTTPS page content or URL paths. Keyword blocking and shorts/reels-only blocking require a later browser-extension or proxy phase.
+- Hosts-file blocking works across browsers, but it cannot inspect HTTPS page content or URL paths.
 - App blocking uses foreground-window polling and displays a blocking overlay when a blocked executable is active.

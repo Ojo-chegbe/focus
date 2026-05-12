@@ -1,13 +1,12 @@
 import http from "node:http";
 
 export class BlockPageServer {
-  private server?: http.Server;
+  private serverByAddress = new Map<string, http.Server>();
 
   start(port: number): void {
-    if (this.server) return;
-    this.server = http.createServer((_, response) => {
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      response.end(`<!doctype html>
+    if (this.serverByAddress.size > 0) return;
+
+    const html = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -25,13 +24,30 @@ export class BlockPageServer {
     <p>This site is currently blocked by an active focus profile. Return to your planned task or adjust the profile when strict mode allows it.</p>
   </main>
 </body>
-</html>`);
-    });
-    this.server.listen(port, "127.0.0.1");
+</html>`;
+
+    // Hosts-file blocking sends plain HTTP requests to 127.0.0.1:80.
+    // Keep the configurable port too so the page is still reachable directly.
+    for (const targetPort of new Set([80, port])) {
+      for (const host of ["127.0.0.1", "::1"] as const) {
+        const key = `${host}:${targetPort}`;
+        const server = http.createServer((_, response) => {
+          response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          response.end(html);
+        });
+        server.on("error", () => {
+          this.serverByAddress.delete(key);
+        });
+        server.listen(targetPort, host);
+        this.serverByAddress.set(key, server);
+      }
+    }
   }
 
   stop(): void {
-    this.server?.close();
-    this.server = undefined;
+    for (const server of this.serverByAddress.values()) {
+      server.close();
+    }
+    this.serverByAddress.clear();
   }
 }

@@ -22,9 +22,10 @@ import {
   X
 } from "lucide-react";
 import type {
+  AllowedApp,
+  AppPolicy,
   AppState,
   BlockedApp,
-  BlockedKeyword,
   BlockedSite,
   HelperStatus,
   Profile,
@@ -34,7 +35,7 @@ import type {
   Weekday
 } from "../shared/models";
 import type { SelectedAppExecutable } from "../shared/ipc";
-import { createId, isStrictLocked, normalizeDomain } from "../shared/rules";
+import { createId, isScheduleActive, isStrictLocked, normalizeDomain } from "../shared/rules";
 import "./styles.css";
 
 const weekdays: Array<{ value: Weekday; label: string }> = [
@@ -54,6 +55,11 @@ type Confirmation = {
   onConfirm: () => Promise<void>;
 };
 
+type NewProfileDraft = {
+  name: string;
+  appPolicy: AppPolicy;
+};
+
 function App() {
   const [view, setView] = useState<"dashboard" | "settings">("dashboard");
   const [state, setState] = useState<AppState>();
@@ -62,11 +68,11 @@ function App() {
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
   const [siteInput, setSiteInput] = useState("");
   const [appInput, setAppInput] = useState("");
-  const [keywordInput, setKeywordInput] = useState("");
   const [error, setError] = useState<string>();
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [runningApps, setRunningApps] = useState<SelectedAppExecutable[]>([]);
   const [showRunningApps, setShowRunningApps] = useState(false);
+  const [newProfileDraft, setNewProfileDraft] = useState<NewProfileDraft>();
 
   const selectedProfile = useMemo(
     () => state?.profiles.find((profile) => profile.id === selectedProfileId) ?? state?.profiles[0],
@@ -120,15 +126,18 @@ function App() {
   }
 
   async function addProfile() {
+    if (!newProfileDraft) return;
     const profile: Profile = {
       id: createId("profile"),
-      name: `Profile ${(state?.profiles.length ?? 0) + 1}`,
+      name: newProfileDraft.name.trim() || `Profile ${(state?.profiles.length ?? 0) + 1}`,
       color: "#0f766e",
       icon: "target",
       enabled: true,
+      appPolicy: newProfileDraft.appPolicy,
       strictMode: "off",
       createdAt: new Date().toISOString()
     };
+    setNewProfileDraft(undefined);
     setSelectedProfileId(profile.id);
     await saveProfile(profile);
   }
@@ -152,10 +161,14 @@ function App() {
 
   async function addApp() {
     if (!selectedProfile || !appInput.trim()) return;
-    const appRule = createBlockedAppFromInput(selectedProfile.id, appInput);
+    const appRule = createAppRuleFromInput(selectedProfile.id, appInput);
     if (!appRule) return;
     setAppInput("");
-    setState(await window.focusApi.saveBlockedApp(appRule));
+    setState(
+      selectedProfile.appPolicy === "allowlist"
+        ? await window.focusApi.saveAllowedApp(appRule)
+        : await window.focusApi.saveBlockedApp(appRule)
+    );
     await refreshLight();
   }
 
@@ -179,7 +192,7 @@ function App() {
 
   async function addSelectedApp(selectedApp: SelectedAppExecutable) {
     if (!selectedProfile) return;
-    const appRule: BlockedApp = {
+    const appRule = {
       id: createId("app"),
       profileId: selectedProfile.id,
       displayName: selectedApp.displayName,
@@ -187,21 +200,44 @@ function App() {
       path: selectedApp.path,
       enabled: true
     };
-    setState(await window.focusApi.saveBlockedApp(appRule));
+    setState(
+      selectedProfile.appPolicy === "allowlist"
+        ? await window.focusApi.saveAllowedApp(appRule)
+        : await window.focusApi.saveBlockedApp(appRule)
+    );
     setShowRunningApps(false);
     await refreshLight();
   }
 
-  async function addKeyword() {
-    if (!selectedProfile || !keywordInput.trim()) return;
-    const keyword: BlockedKeyword = {
-      id: createId("keyword"),
-      profileId: selectedProfile.id,
-      phrase: keywordInput.trim(),
-      enabled: true
-    };
-    setKeywordInput("");
-    setState(await window.focusApi.saveBlockedKeyword(keyword));
+  function openProfileCreator() {
+    setNewProfileDraft({
+      name: `Profile ${(state?.profiles.length ?? 0) + 1}`,
+      appPolicy: "blocklist"
+    });
+  }
+
+  function changeAppPolicy(appPolicy: AppPolicy) {
+    if (!selectedProfile || selectedProfile.appPolicy === appPolicy || locked) return;
+    if (appPolicy === "allowlist") {
+      confirmAction({
+        title: "Switch to allowlist mode?",
+        message:
+          "Only apps in this profile's allowed list will be usable during active focus time. Other foreground apps may be closed.",
+        confirmLabel: "Switch mode",
+        onConfirm: async () => {
+          await saveProfile({ ...selectedProfile, appPolicy });
+        }
+      });
+      return;
+    }
+    confirmAction({
+      title: "Switch to blocklist mode?",
+      message: "This profile will stop closing unlisted apps and will only close apps in its blocked list.",
+      confirmLabel: "Switch mode",
+      onConfirm: async () => {
+        await saveProfile({ ...selectedProfile, appPolicy });
+      }
+    });
   }
 
   function confirmAction(confirmationRequest: Confirmation): void {
@@ -223,7 +259,7 @@ function App() {
     if (!selectedProfile || state?.profiles.length === 1 || locked) return;
     confirmAction({
       title: "Delete profile?",
-      message: `This removes "${selectedProfile.name}" and every rule, schedule, and keyword inside it.`,
+      message: `This removes "${selectedProfile.name}" and every rule and schedule inside it.`,
       confirmLabel: "Delete profile",
       onConfirm: async () => {
         const nextState = await window.focusApi.deleteProfile(selectedProfile.id);
@@ -278,11 +314,16 @@ function App() {
   }
 
   const locked = isStrictLocked(selectedProfile.strictUntil);
-  const profileApps = state.blockedApps.filter((app) => app.profileId === selectedProfile.id);
+  const profileApps =
+    selectedProfile.appPolicy === "allowlist"
+      ? state.allowedApps.filter((app) => app.profileId === selectedProfile.id)
+      : state.blockedApps.filter((app) => app.profileId === selectedProfile.id);
   const profileSites = state.blockedSites.filter((site) => site.profileId === selectedProfile.id);
-  const profileKeywords = state.blockedKeywords.filter((keyword) => keyword.profileId === selectedProfile.id);
   const profileSchedules = state.schedules.filter((schedule) => schedule.profileId === selectedProfile.id);
   const profileSessions = state.focusSessions.filter((session) => session.profileId === selectedProfile.id && session.active);
+  const activeReason = status?.activeRules.activationReasonsByProfileId?.[selectedProfile.id];
+  const isProfileActiveNow = Boolean(status?.activeRules.activeProfileIds.includes(selectedProfile.id));
+  const enabledScheduleCount = profileSchedules.filter((schedule) => schedule.enabled).length;
 
   return (
     <main className="app-shell">
@@ -322,7 +363,7 @@ function App() {
           </button>
         </div>
 
-        <button className="secondary wide" onClick={addProfile}>
+        <button className="secondary wide" onClick={openProfileCreator}>
           <Plus size={16} />
           Profile
         </button>
@@ -362,6 +403,13 @@ function App() {
                   disabled={locked}
                   onChange={(event) => void saveProfile({ ...selectedProfile, name: event.target.value })}
                 />
+                <p className="profile-activation-state">
+                  {isProfileActiveNow
+                    ? `Blocking active now${activeReason ? ` (${formatActivationReason(activeReason)})` : ""}`
+                    : "Blocking idle now"}
+                  {" - "}
+                  {selectedProfile.appPolicy === "allowlist" ? "Allowlist mode" : "Blocklist mode"}
+                </p>
               </div>
               <div className="topbar-actions">
                 <button
@@ -402,7 +450,12 @@ function App() {
                 <button
                   className="secondary"
                   key={minutes}
-                  onClick={() => void window.focusApi.startFocusSession(selectedProfile.id, minutes).then(setState)}
+                  onClick={() =>
+                    void window.focusApi.startFocusSession(selectedProfile.id, minutes).then(async (nextState) => {
+                      setState(nextState);
+                      await refreshLight();
+                    })
+                  }
                 >
                   {minutes}m
                 </button>
@@ -443,8 +496,38 @@ function App() {
                   {locked ? `Changes resume ${new Date(selectedProfile.strictUntil ?? "").toLocaleString()}` : "Lock edits during a focus block."}
                 </p>
               </div>
-              <button className="primary" disabled={locked} onClick={() => void window.focusApi.lockProfile(selectedProfile.id, 60).then(setState)}>
+              <button
+                className="primary"
+                disabled={locked}
+                onClick={() =>
+                  void window.focusApi.lockProfile(selectedProfile.id, 60).then(async (nextState) => {
+                    setState(nextState);
+                    await refreshLight();
+                  })
+                }
+              >
                 Lock 1h
+              </button>
+            </div>
+          </Panel>
+
+          <Panel title="App Mode" icon={<Shield size={18} />}>
+            <div className="mode-options">
+              <button
+                className={selectedProfile.appPolicy === "blocklist" ? "mode-card active" : "mode-card"}
+                disabled={locked}
+                onClick={() => changeAppPolicy("blocklist")}
+              >
+                <strong>Blocklist</strong>
+                <span>Close only the apps you select.</span>
+              </button>
+              <button
+                className={selectedProfile.appPolicy === "allowlist" ? "mode-card active" : "mode-card"}
+                disabled={locked}
+                onClick={() => changeAppPolicy("allowlist")}
+              >
+                <strong>Allowlist</strong>
+                <span>Allow selected apps. Close other foreground apps.</span>
               </button>
             </div>
           </Panel>
@@ -472,7 +555,11 @@ function App() {
                 main: site.normalizedHost,
                 meta: site.includeSubdomains ? "Includes www subdomain" : "Exact host only",
                 enabled: site.enabled,
-                onToggle: () => void window.focusApi.saveBlockedSite({ ...site, enabled: !site.enabled }).then(setState),
+                onToggle: () =>
+                  void window.focusApi.saveBlockedSite({ ...site, enabled: !site.enabled }).then(async (nextState) => {
+                    setState(nextState);
+                    await refreshLight();
+                  }),
                 onDelete: () =>
                   confirmAction({
                     title: "Delete website rule?",
@@ -488,12 +575,21 @@ function App() {
             />
           </Panel>
 
-          <Panel title="App Blocking" icon={<AppWindow size={18} />} className="span-2">
+          <Panel
+            title={selectedProfile.appPolicy === "allowlist" ? "Allowed Apps" : "Blocked Apps"}
+            icon={<AppWindow size={18} />}
+            className="span-2"
+          >
+            <p className="muted">
+              {selectedProfile.appPolicy === "allowlist"
+                ? "During active focus time, only these foreground apps are allowed. Background activity is not targeted."
+                : "During active focus time, these foreground apps are closed when detected."}
+            </p>
             <div className="entry-row">
               <input
                 value={appInput}
                 disabled={locked}
-                placeholder="discord.exe"
+                placeholder={selectedProfile.appPolicy === "allowlist" ? "code.exe" : "discord.exe"}
                 onChange={(event) => setAppInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void addApp();
@@ -534,20 +630,33 @@ function App() {
               </div>
             )}
             <RuleTable
-              empty="No blocked apps yet."
+              empty={selectedProfile.appPolicy === "allowlist" ? "No allowed apps yet." : "No blocked apps yet."}
               rows={profileApps.map((appRule) => ({
                 id: appRule.id,
                 main: appRule.displayName,
                 meta: appRule.executable,
                 enabled: appRule.enabled,
-                onToggle: () => void window.focusApi.saveBlockedApp({ ...appRule, enabled: !appRule.enabled }).then(setState),
+                onToggle: () =>
+                  void (selectedProfile.appPolicy === "allowlist"
+                    ? window.focusApi.saveAllowedApp({ ...appRule, enabled: !appRule.enabled })
+                    : window.focusApi.saveBlockedApp({ ...appRule, enabled: !appRule.enabled })
+                  ).then(async (nextState) => {
+                      setState(nextState);
+                      await refreshLight();
+                    }),
                 onDelete: () =>
                   confirmAction({
                     title: "Delete app rule?",
-                    message: `Remove "${appRule.displayName}" from app blocking.`,
+                    message: `Remove "${appRule.displayName}" from ${
+                      selectedProfile.appPolicy === "allowlist" ? "allowed apps" : "app blocking"
+                    }.`,
                     confirmLabel: "Delete rule",
                     onConfirm: async () => {
-                      setState(await window.focusApi.deleteBlockedApp(appRule.id));
+                      setState(
+                        selectedProfile.appPolicy === "allowlist"
+                          ? await window.focusApi.deleteAllowedApp(appRule.id)
+                          : await window.focusApi.deleteBlockedApp(appRule.id)
+                      );
                       await refreshLight();
                     }
                   })
@@ -557,6 +666,11 @@ function App() {
           </Panel>
 
           <Panel title="Schedules" icon={<CalendarClock size={18} />} className="span-2">
+            <p className="muted">
+              {enabledScheduleCount > 0
+                ? `${enabledScheduleCount} enabled schedule${enabledScheduleCount > 1 ? "s" : ""}. Blocking turns on only during schedule windows or active focus sessions.`
+                : "No enabled schedules. This profile stays active whenever it is enabled unless you disable the profile."}
+            </p>
             <button className="secondary compact" disabled={locked} onClick={() => void addSchedule()}>
               <Plus size={16} />
               Schedule
@@ -566,8 +680,14 @@ function App() {
                 <ScheduleEditor
                   key={schedule.id}
                   schedule={schedule}
+                  isActiveNow={isScheduleActive(schedule)}
                   locked={locked}
-                  onSave={(next) => void window.focusApi.saveSchedule(next).then(setState)}
+                  onSave={(next) =>
+                    void window.focusApi.saveSchedule(next).then(async (nextState) => {
+                      setState(nextState);
+                      await refreshLight();
+                    })
+                  }
                   onDelete={() =>
                     confirmAction({
                       title: "Delete schedule?",
@@ -582,56 +702,6 @@ function App() {
                 />
               ))}
               {profileSchedules.length === 0 && <p className="empty">No schedules yet.</p>}
-            </div>
-          </Panel>
-
-          <Panel title="Keyword Blocking" icon={<Shield size={18} />}>
-            <div className="entry-row">
-              <input
-                value={keywordInput}
-                disabled={locked}
-                placeholder="keyword or phrase"
-                onChange={(event) => setKeywordInput(event.target.value)}
-              />
-              <button className="primary icon-only" disabled={locked} onClick={() => void addKeyword()} aria-label="Add keyword">
-                <Plus size={16} />
-              </button>
-            </div>
-            <p className="muted">
-              Stored for the browser-extension/proxy phase. Hosts blocking cannot inspect page text.
-            </p>
-            <div className="keyword-list">
-              {profileKeywords.map((keyword) => (
-                <div key={keyword.id} className="keyword-row">
-                  <span className={keyword.enabled ? "chip" : "chip muted-chip"}>{keyword.phrase}</span>
-                  <button
-                    className={keyword.enabled ? "toggle on" : "toggle"}
-                    disabled={locked}
-                    onClick={() => void window.focusApi.saveBlockedKeyword({ ...keyword, enabled: !keyword.enabled }).then(setState)}
-                  >
-                    {keyword.enabled ? "On" : "Off"}
-                  </button>
-                  <button
-                    className="danger icon-only"
-                    disabled={locked}
-                    onClick={() =>
-                      confirmAction({
-                        title: "Delete keyword?",
-                        message: `Remove "${keyword.phrase}" from keyword blocking.`,
-                        confirmLabel: "Delete keyword",
-                        onConfirm: async () => {
-                          setState(await window.focusApi.deleteBlockedKeyword(keyword.id));
-                          await refreshLight();
-                        }
-                      })
-                    }
-                    aria-label="Delete keyword"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              ))}
-              {profileKeywords.length === 0 && <p className="empty">No keyword rules yet.</p>}
             </div>
           </Panel>
 
@@ -733,6 +803,14 @@ function App() {
           onConfirm={() => void runConfirmedAction()}
         />
       )}
+      {newProfileDraft && (
+        <CreateProfileDialog
+          draft={newProfileDraft}
+          onChange={setNewProfileDraft}
+          onCancel={() => setNewProfileDraft(undefined)}
+          onCreate={() => void addProfile()}
+        />
+      )}
     </main>
   );
 }
@@ -807,6 +885,60 @@ function ConfirmationDialog({
   );
 }
 
+function CreateProfileDialog({
+  draft,
+  onChange,
+  onCancel,
+  onCreate
+}: {
+  draft: NewProfileDraft;
+  onChange: (draft: NewProfileDraft) => void;
+  onCancel: () => void;
+  onCreate: () => void;
+}) {
+  return (
+    <div className="confirm-backdrop" role="presentation">
+      <section className="confirm-dialog profile-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-create-title">
+        <div>
+          <p className="eyebrow">New profile</p>
+          <h2 id="profile-create-title">Choose your app mode</h2>
+          <p>
+            This controls app enforcement during schedules and focus sessions. Background processes are not targeted.
+          </p>
+        </div>
+        <label>
+          Profile name
+          <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+        </label>
+        <div className="mode-options">
+          <button
+            className={draft.appPolicy === "blocklist" ? "mode-card active" : "mode-card"}
+            onClick={() => onChange({ ...draft, appPolicy: "blocklist" })}
+          >
+            <strong>Blocklist</strong>
+            <span>Close only the apps you add to the blocked list.</span>
+          </button>
+          <button
+            className={draft.appPolicy === "allowlist" ? "mode-card active" : "mode-card"}
+            onClick={() => onChange({ ...draft, appPolicy: "allowlist" })}
+          >
+            <strong>Allowlist</strong>
+            <span>Allow selected apps and close other foreground apps.</span>
+          </button>
+        </div>
+        <div className="confirm-actions">
+          <button className="secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" onClick={onCreate}>
+            Create profile
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function RuleTable({
   rows,
   empty,
@@ -839,11 +971,13 @@ function RuleTable({
 
 function ScheduleEditor({
   schedule,
+  isActiveNow,
   locked,
   onSave,
   onDelete
 }: {
   schedule: Schedule;
+  isActiveNow: boolean;
   locked: boolean;
   onSave: (schedule: Schedule) => void;
   onDelete: () => void;
@@ -862,6 +996,9 @@ function ScheduleEditor({
         disabled={locked}
         onChange={(event) => onSave({ ...schedule, label: event.target.value })}
       />
+      <p className="muted">
+        {schedule.enabled ? (isActiveNow ? "Active right now" : "Not active right now") : "Schedule is turned off"}
+      </p>
       <div className="time-row">
         <input
           type="time"
@@ -925,7 +1062,7 @@ function formatSeconds(seconds: number): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
-function createBlockedAppFromInput(profileId: string, input: string): BlockedApp | undefined {
+function createAppRuleFromInput(profileId: string, input: string): BlockedApp | AllowedApp | undefined {
   const trimmed = input.trim();
   if (!trimmed) return undefined;
   const fileName = trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
@@ -950,6 +1087,12 @@ function downloadText(value: string): void {
   anchor.download = "focus-export.json";
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function formatActivationReason(reason: "manual" | "schedule" | "focus-session"): string {
+  if (reason === "manual") return "manual";
+  if (reason === "schedule") return "schedule";
+  return "focus session";
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
