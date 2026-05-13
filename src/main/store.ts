@@ -7,8 +7,10 @@ import type {
   AllowedApp,
   BlockedApp,
   BlockedSite,
+  FocusSessionConfig,
   FocusSession,
   Profile,
+  ProfileCondition,
   Schedule,
   UsageEvent
 } from "../shared/models";
@@ -77,6 +79,7 @@ function defaultState(): AppState {
         enabled: false
       }
     ],
+    profileConditions: [],
     focusSessions: [],
     usageEvents: [],
     settings: defaultSettings()
@@ -153,6 +156,7 @@ export class FocusStore {
     this.state.allowedApps = this.state.allowedApps.filter((item) => item.profileId !== profileId);
     this.state.blockedSites = this.state.blockedSites.filter((item) => item.profileId !== profileId);
     this.state.schedules = this.state.schedules.filter((item) => item.profileId !== profileId);
+    this.state.profileConditions = this.state.profileConditions.filter((item) => item.profileId !== profileId);
     this.persist();
     return this.getState();
   }
@@ -215,16 +219,57 @@ export class FocusStore {
     return this.getState();
   }
 
-  startFocusSession(profileId: string, minutes: number): AppState {
+  saveProfileCondition(condition: ProfileCondition): AppState {
+    if (this.isProfileLocked(condition.profileId)) return this.getState();
+    this.upsert("profileConditions", condition);
+    return this.getState();
+  }
+
+  deleteProfileCondition(id: string): AppState {
+    this.deleteById("profileConditions", id);
+    return this.getState();
+  }
+
+  startFocusSession(profileIdOrConfig: string | FocusSessionConfig, minutes?: number): AppState {
+    const config: FocusSessionConfig =
+      typeof profileIdOrConfig === "string"
+        ? {
+            profileId: profileIdOrConfig,
+            mode: "duration",
+            durationMinutes: Math.max(1, minutes ?? 30),
+            focusMinutes: 25,
+            breakMinutes: 5,
+            rounds: 1,
+            allowedApps: [],
+            wallpaperType: "default",
+            wallpaperValue: "#0f1724",
+            showPauseButton: true,
+            strict: false
+          }
+        : profileIdOrConfig;
+    const totalMinutes =
+      config.mode === "pomodoro"
+        ? Math.max(1, (config.rounds ?? 1) * (config.focusMinutes ?? 25) + Math.max(0, (config.rounds ?? 1) - 1) * (config.breakMinutes ?? 5))
+        : Math.max(1, config.durationMinutes ?? 30);
     const session: FocusSession = {
       id: createId("session"),
-      profileId,
+      profileId: config.profileId,
+      mode: config.mode,
+      focusMinutes: config.focusMinutes,
+      breakMinutes: config.breakMinutes,
+      rounds: config.rounds,
+      currentRound: 1,
+      allowedApps: config.allowedApps,
+      wallpaperType: config.wallpaperType,
+      wallpaperValue: config.wallpaperValue,
+      showPauseButton: config.showPauseButton,
+      strict: config.strict,
       startedAt: nowIso(),
-      endsAt: new Date(Date.now() + minutes * 60_000).toISOString(),
+      endsAt: new Date(Date.now() + totalMinutes * 60_000).toISOString(),
       active: true
     };
     this.state.focusSessions.push(session);
-    this.addEvent({ type: "focus-started", target: `${minutes} minute session`, profileId });
+    this.addEvent({ type: "focus-started", target: `${totalMinutes} minute session`, profileId: config.profileId });
     this.persist();
     return this.getState();
   }
@@ -232,9 +277,36 @@ export class FocusStore {
   endFocusSession(id: string): AppState {
     const session = this.state.focusSessions.find((item) => item.id === id);
     if (session) {
+      if (session.strict && session.active) return this.getState();
       session.active = false;
+      session.paused = false;
       this.addEvent({ type: "focus-ended", target: "Focus session", profileId: session.profileId });
     }
+    this.persist();
+    return this.getState();
+  }
+
+  pauseFocusSession(id: string): AppState {
+    const session = this.state.focusSessions.find((item) => item.id === id);
+    if (!session || !session.active) return this.getState();
+    if (session.strict || session.showPauseButton === false) return this.getState();
+    if (session.paused) return this.getState();
+    const remainingMs = Math.max(0, new Date(session.endsAt).getTime() - Date.now());
+    session.paused = true;
+    session.pausedAt = nowIso();
+    session.remainingMs = remainingMs;
+    this.persist();
+    return this.getState();
+  }
+
+  resumeFocusSession(id: string): AppState {
+    const session = this.state.focusSessions.find((item) => item.id === id);
+    if (!session || !session.active || !session.paused) return this.getState();
+    const remainingMs = Math.max(0, session.remainingMs ?? 0);
+    session.paused = false;
+    session.pausedAt = undefined;
+    session.endsAt = new Date(Date.now() + remainingMs).toISOString();
+    session.remainingMs = undefined;
     this.persist();
     return this.getState();
   }
@@ -279,6 +351,7 @@ export class FocusStore {
           endTime: typeof schedule.endTime === "string" ? schedule.endTime : "17:00",
           enabled: Boolean(schedule.enabled)
         })),
+        profileConditions: parsed.profileConditions ?? [],
         focusSessions: (parsed.focusSessions ?? []).map((session) => ({
           ...session,
           active: Boolean(session.active)
@@ -297,7 +370,7 @@ export class FocusStore {
     fs.writeFileSync(this.dataPath, JSON.stringify(this.state, null, 2), "utf8");
   }
 
-  private upsert<K extends "profiles" | "blockedApps" | "allowedApps" | "blockedSites" | "schedules">(
+  private upsert<K extends "profiles" | "blockedApps" | "allowedApps" | "blockedSites" | "schedules" | "profileConditions">(
     collection: K,
     value: AppState[K][number]
   ): void {
@@ -308,7 +381,7 @@ export class FocusStore {
     this.persist();
   }
 
-  private deleteById<K extends "blockedApps" | "allowedApps" | "blockedSites" | "schedules">(
+  private deleteById<K extends "blockedApps" | "allowedApps" | "blockedSites" | "schedules" | "profileConditions">(
     collection: K,
     id: string
   ): void {
@@ -347,6 +420,7 @@ export class FocusStore {
     let changed = false;
     for (const session of this.state.focusSessions) {
       if (session.active && new Date(session.endsAt).getTime() <= now) {
+        if (session.paused) continue;
         session.active = false;
         changed = true;
       }

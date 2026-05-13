@@ -40,13 +40,29 @@ export function isScheduleActive(schedule: Schedule, now = new Date()): boolean 
 
 export function getActiveRules(state: AppState, now = new Date()): ActiveRules {
   const activationReasonsByProfileId: Record<string, "manual" | "schedule" | "focus-session"> = {};
+  const nowMs = now.getTime();
 
   const activeProfiles = state.profiles.filter((profile) => {
     if (!profile.enabled) return false;
     const profileSchedules = state.schedules.filter((schedule) => schedule.profileId === profile.id && schedule.enabled);
     const hasActiveSchedule = profileSchedules.some((schedule) => isScheduleActive(schedule, now));
     const profileSessions = state.focusSessions.filter((session) => session.profileId === profile.id && session.active);
-    const hasActiveSession = profileSessions.some((session) => new Date(session.endsAt).getTime() > now.getTime());
+    const hasActiveSession = profileSessions.some(
+      (session) => !session.paused && new Date(session.endsAt).getTime() > now.getTime()
+    );
+    const quickBlockConditions = state.profileConditions.filter(
+      (condition) =>
+        condition.profileId === profile.id &&
+        condition.enabled &&
+        condition.type === "quick-block" &&
+        condition.startsAt &&
+        condition.endsAt
+    );
+    const hasQuickBlock = quickBlockConditions.some((condition) => {
+      const startMs = new Date(condition.startsAt ?? "").getTime();
+      const endMs = new Date(condition.endsAt ?? "").getTime();
+      return Number.isFinite(startMs) && Number.isFinite(endMs) && startMs <= nowMs && nowMs < endMs;
+    });
     const hasAutomation = profileSchedules.length > 0 || profileSessions.length > 0;
 
     // Profiles with no schedule/session remain manually active when enabled.
@@ -55,6 +71,10 @@ export function getActiveRules(state: AppState, now = new Date()): ActiveRules {
       return true;
     }
     if (hasActiveSession) {
+      activationReasonsByProfileId[profile.id] = "focus-session";
+      return true;
+    }
+    if (hasQuickBlock) {
       activationReasonsByProfileId[profile.id] = "focus-session";
       return true;
     }
@@ -70,6 +90,13 @@ export function getActiveRules(state: AppState, now = new Date()): ActiveRules {
     activeProfiles.map((profile) => [profile.id, profile.appPolicy ?? "blocklist"])
   );
   const blockedApps = state.blockedApps.filter((app) => app.enabled && activeProfileSet.has(app.profileId));
+  const activeFocusSession =
+    state.focusSessions
+      .filter((session) => session.active && new Date(session.endsAt).getTime() > nowMs)
+      .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime())[0] ?? undefined;
+  const focusSessionAllowedApps = activeFocusSession?.paused
+    ? []
+    : (activeFocusSession?.allowedApps ?? []).filter((app) => app.enabled);
 
   return {
     activeProfileIds,
@@ -78,6 +105,8 @@ export function getActiveRules(state: AppState, now = new Date()): ActiveRules {
     appPoliciesByProfileId,
     blockedApps,
     allowedApps: state.allowedApps.filter((app) => app.enabled && activeProfileSet.has(app.profileId)),
+    focusSessionAllowedApps,
+    activeFocusSession,
     apps: blockedApps,
     sites: state.blockedSites.filter((site) => site.enabled && activeProfileSet.has(site.profileId))
   };

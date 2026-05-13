@@ -136,6 +136,40 @@ input:focus-visible {
   gap: 8px;
 }
 
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-card {
+  min-height: 108px;
+  border: 1px solid #dbe5f3;
+  border-radius: var(--radius-s);
+  background: #ffffff;
+  text-align: left;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.profile-card.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(10, 102, 255, 0.12);
+}
+
+.profile-card p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.profile-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .profile-button {
   width: 100%;
   min-height: 46px;
@@ -490,6 +524,16 @@ input:focus-visible {
   background: #ffffff;
 }
 
+.panel select {
+  min-height: 40px;
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  padding: 0 10px;
+  outline: 0;
+  background: #ffffff;
+}
+
 .panel input:focus {
   border-color: color-mix(in srgb, var(--primary) 70%, white 30%);
   box-shadow: 0 0 0 3px rgba(10, 102, 255, 0.15);
@@ -805,6 +849,10 @@ input:focus-visible {
   }
 
   .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-grid {
     grid-template-columns: 1fr;
   }
 

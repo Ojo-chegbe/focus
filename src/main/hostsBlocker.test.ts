@@ -11,6 +11,8 @@ describe("HostsBlocker", () => {
       appPoliciesByProfileId: { p1: "blocklist" },
       blockedApps: [],
       allowedApps: [],
+      focusSessionAllowedApps: [],
+      activeFocusSession: undefined,
       apps: [],
       sites: [
         {

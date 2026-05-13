@@ -11,6 +11,7 @@ import { FocusStore } from "./store";
 import { WindowsMonitor } from "./windowsMonitor";
 
 let mainWindow: BrowserWindow | undefined;
+let focusModeWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let store: FocusStore;
 let hostsBlocker: HostsBlocker;
@@ -22,7 +23,7 @@ let isQuitting = false;
 const isDev = !app.isPackaged;
 const execFileAsync = promisify(execFile);
 const launchTaskName = "FocusDesktop";
-const shouldQuitEarly = !app.requestSingleInstanceLock();
+const shouldQuitEarly = isDev ? false : !app.requestSingleInstanceLock();
 
 if (shouldQuitEarly) {
   app.quit();
@@ -105,6 +106,10 @@ function registerIpc(): void {
     saveAndApply(() => store.startFocusSession(profileId, minutes))
   );
   ipcMain.handle(channels.endFocusSession, async (_, id) => saveAndApply(() => store.endFocusSession(id)));
+  ipcMain.handle(channels.pauseFocusSession, async (_, id) => saveAndApply(() => store.pauseFocusSession(id)));
+  ipcMain.handle(channels.resumeFocusSession, async (_, id) => saveAndApply(() => store.resumeFocusSession(id)));
+  ipcMain.handle(channels.saveProfileCondition, async (_, condition) => saveAndApply(() => store.saveProfileCondition(condition)));
+  ipcMain.handle(channels.deleteProfileCondition, async (_, id) => saveAndApply(() => store.deleteProfileCondition(id)));
   ipcMain.handle(channels.lockProfile, async (_, profileId, minutes) => saveAndApply(() => store.lockProfile(profileId, minutes)));
   ipcMain.handle(channels.applyRules, () => applyRulesAndRecord());
   ipcMain.handle(channels.getHelperStatus, () => hostsBlocker.getStatus(getActiveRules(store.getState())));
@@ -232,6 +237,7 @@ async function saveAndApply(mutator: () => AppState): Promise<AppState> {
 
 async function applyRulesAndRecord() {
   const activeRules = getActiveRules(store.getState());
+  syncFocusModeWindow(activeRules);
   try {
     await hostsBlocker.apply(activeRules);
     store.addUsageEvent({
@@ -247,6 +253,91 @@ async function applyRulesAndRecord() {
     });
   }
   return hostsBlocker.getStatus(activeRules);
+}
+
+function syncFocusModeWindow(activeRules: ReturnType<typeof getActiveRules>): void {
+  const session = activeRules.activeFocusSession;
+  if (!session || !session.active) {
+    if (focusModeWindow && !focusModeWindow.isDestroyed()) focusModeWindow.close();
+    focusModeWindow = undefined;
+    return;
+  }
+  const sessionEndsAt = new Date(session.endsAt).getTime();
+  if (!Number.isFinite(sessionEndsAt) || sessionEndsAt <= Date.now()) {
+    if (focusModeWindow && !focusModeWindow.isDestroyed()) focusModeWindow.close();
+    focusModeWindow = undefined;
+    return;
+  }
+  const title = "Focus Mode";
+  const allowedApps = (session.allowedApps ?? []).filter((app) => app.enabled);
+  const wallpaper =
+    session.wallpaperType === "solid"
+      ? (session.wallpaperValue || "#0f1724")
+      : "linear-gradient(135deg, #0f1724 0%, #111827 60%, #1f2937 100%)";
+  const endsAtLabel = new Date(session.endsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const isPaused = Boolean(session.paused);
+  const canPause = !session.strict && session.showPauseButton !== false;
+  const canEnd = !session.strict;
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>${title}</title>
+<style>
+body{margin:0;font-family:Segoe UI,sans-serif;background:${wallpaper};color:#f9fafb;height:100vh;display:grid;place-items:center}
+main{width:min(980px,94vw);text-align:center}
+h1{font-size:48px;margin:0 0 8px} p{color:#d1d5db} .grid{margin-top:22px;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.chip{padding:12px;border-radius:10px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);display:grid;gap:5px}
+.chip button{height:34px;border:0;border-radius:8px;background:#f8fafc;color:#111827;font-weight:700;cursor:pointer}
+.actions{display:flex;gap:10px;justify-content:center;margin-top:14px}
+.actions button{height:38px;padding:0 14px;border:0;border-radius:8px;background:#f8fafc;color:#111827;font-weight:700;cursor:pointer}
+</style></head><body><main><h1>Focus Session Active</h1><p>Session ends at ${endsAtLabel}</p><div class="grid">${
+    allowedApps.length > 0
+      ? allowedApps
+          .map(
+            (app) =>
+              `<div class="chip"><strong>${escapeHtml(app.displayName || app.executable)}</strong><small>${escapeHtml(
+                app.executable
+              )}</small>${app.path ? `<button onclick="location.href='focus-launch://${encodeURIComponent(app.path)}'">Open</button>` : ""}</div>`
+          )
+          .join("")
+      : "<div class=\"chip\">No allowed apps configured</div>"
+  }</div><div class="actions">${
+    canPause ? `<button onclick="location.href='focus-action://${isPaused ? "resume" : "pause"}/${session.id}'">${isPaused ? "Resume" : "Pause"}</button>` : ""
+  }${canEnd ? `<button onclick="location.href='focus-action://end/${session.id}'">End Session</button>` : ""}</div></main></body></html>`;
+  if (!focusModeWindow || focusModeWindow.isDestroyed()) {
+    focusModeWindow = new BrowserWindow({
+      fullscreen: true,
+      frame: false,
+      alwaysOnTop: true,
+      title: "Focus Mode",
+      webPreferences: { sandbox: true }
+    });
+    focusModeWindow.webContents.on("will-navigate", (event, url) => {
+      if (url.startsWith("focus-launch://")) {
+        event.preventDefault();
+        const encodedPath = url.replace("focus-launch://", "");
+        const appPath = decodeURIComponent(encodedPath);
+        void shell.openPath(appPath);
+        return;
+      }
+      if (url.startsWith("focus-action://")) {
+        event.preventDefault();
+        const [, action, id] = url.replace("focus-action://", "").split("/");
+        if (!id) return;
+        if (action === "pause") {
+          void saveAndApply(() => store.pauseFocusSession(id));
+          return;
+        }
+        if (action === "resume") {
+          void saveAndApply(() => store.resumeFocusSession(id));
+          return;
+        }
+        if (action === "end") {
+          void saveAndApply(() => store.endFocusSession(id));
+        }
+      }
+    });
+  }
+  void focusModeWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
 
 function restartRuntimeServices(state: AppState): void {
@@ -407,4 +498,18 @@ app.on("before-quit", () => {
   if (rulesRefreshTimer) clearInterval(rulesRefreshTimer);
   monitor?.stop();
   blockPageServer?.stop();
+  if (focusModeWindow && !focusModeWindow.isDestroyed()) focusModeWindow.close();
 });
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    const entities: Record<string, string> = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;"
+    };
+    return entities[char] ?? char;
+  });
+}

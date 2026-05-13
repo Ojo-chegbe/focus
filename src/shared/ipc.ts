@@ -1,5 +1,6 @@
 import type {
   ActiveRules,
+  FocusSessionConfig,
   AppState,
   AppSettings,
   AllowedApp,
@@ -8,6 +9,7 @@ import type {
   HelperStatus,
   Profile,
   Schedule,
+  ProfileCondition,
   UsageEvent,
   UsageSummary
 } from "./models";
@@ -26,8 +28,12 @@ export interface AppApi {
   deleteBlockedSite(id: string): Promise<AppState>;
   saveSchedule(schedule: Schedule): Promise<AppState>;
   deleteSchedule(id: string): Promise<AppState>;
-  startFocusSession(profileId: string, minutes: number): Promise<AppState>;
+  startFocusSession(profileIdOrConfig: string | FocusSessionConfig, minutes?: number): Promise<AppState>;
   endFocusSession(id: string): Promise<AppState>;
+  pauseFocusSession(id: string): Promise<AppState>;
+  resumeFocusSession(id: string): Promise<AppState>;
+  saveProfileCondition(condition: ProfileCondition): Promise<AppState>;
+  deleteProfileCondition(id: string): Promise<AppState>;
   lockProfile(profileId: string, minutes: number): Promise<AppState>;
   applyRules(): Promise<HelperStatus>;
   getHelperStatus(): Promise<HelperStatus>;
@@ -64,6 +70,10 @@ export const channels = {
   deleteSchedule: "schedule:delete",
   startFocusSession: "focus-session:start",
   endFocusSession: "focus-session:end",
+  pauseFocusSession: "focus-session:pause",
+  resumeFocusSession: "focus-session:resume",
+  saveProfileCondition: "profile-condition:save",
+  deleteProfileCondition: "profile-condition:delete",
   lockProfile: "profile:lock",
   applyRules: "rules:apply",
   getHelperStatus: "helper:status",

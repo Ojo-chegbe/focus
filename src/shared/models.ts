@@ -68,9 +68,47 @@ export interface Schedule {
 export interface FocusSession {
   id: string;
   profileId: string;
+  mode?: "duration" | "pomodoro";
+  focusMinutes?: number;
+  breakMinutes?: number;
+  rounds?: number;
+  currentRound?: number;
+  allowedApps?: AllowedApp[];
+  wallpaperType?: "default" | "solid" | "custom";
+  wallpaperValue?: string;
+  showPauseButton?: boolean;
+  strict?: boolean;
+  paused?: boolean;
+  pausedAt?: string;
+  remainingMs?: number;
   startedAt: string;
   endsAt: string;
   active: boolean;
+}
+
+export interface FocusSessionConfig {
+  profileId: string;
+  mode: "duration" | "pomodoro";
+  durationMinutes?: number;
+  focusMinutes?: number;
+  breakMinutes?: number;
+  rounds?: number;
+  allowedApps: AllowedApp[];
+  wallpaperType: "default" | "solid" | "custom";
+  wallpaperValue: string;
+  showPauseButton: boolean;
+  strict: boolean;
+}
+
+export interface ProfileCondition {
+  id: string;
+  profileId: string;
+  type: "manual" | "schedule" | "quick-block" | "usage-limit";
+  enabled: boolean;
+  startsAt?: string;
+  endsAt?: string;
+  limitScope?: "daily" | "hourly";
+  limitMinutes?: number;
 }
 
 export interface UsageEvent {
@@ -98,6 +136,7 @@ export interface AppState {
   allowedApps: AllowedApp[];
   blockedSites: BlockedSite[];
   schedules: Schedule[];
+  profileConditions: ProfileCondition[];
   focusSessions: FocusSession[];
   usageEvents: UsageEvent[];
   settings: AppSettings;
@@ -110,6 +149,8 @@ export interface ActiveRules {
   appPoliciesByProfileId: Record<string, AppPolicy>;
   blockedApps: BlockedApp[];
   allowedApps: AllowedApp[];
+  focusSessionAllowedApps: AllowedApp[];
+  activeFocusSession?: FocusSession;
   apps: BlockedApp[];
   sites: BlockedSite[];
 }

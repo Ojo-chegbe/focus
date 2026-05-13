@@ -71,6 +71,7 @@ describe("getActiveRules", () => {
       ],
       schedules: [],
       focusSessions: [],
+      profileConditions: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -124,6 +125,7 @@ describe("getActiveRules", () => {
           active: true
         }
       ],
+      profileConditions: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -168,6 +170,7 @@ describe("getActiveRules", () => {
         }
       ],
       focusSessions: [],
+      profileConditions: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -219,6 +222,7 @@ describe("getActiveRules", () => {
           active: true
         }
       ],
+      profileConditions: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -261,6 +265,7 @@ describe("getActiveRules", () => {
         }
       ],
       focusSessions: [],
+      profileConditions: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -296,6 +301,7 @@ describe("getActiveRules", () => {
       blockedSites: [],
       schedules: [],
       focusSessions: [],
+      profileConditions: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,

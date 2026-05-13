@@ -87,10 +87,13 @@ export class WindowsMonitor {
     this.lastExecutable = executable;
 
     const rules = this.getRules();
+    const hasSessionAllowlist = rules.focusSessionAllowedApps.length > 0;
     const hasAllowlistMode = Object.values(rules.appPoliciesByProfileId).includes("allowlist");
-    const blocked = hasAllowlistMode
-      ? findAllowlistViolation(rules, current)
-      : rules.blockedApps.find((app) => matchesAppRule(app, current));
+    const blocked = hasSessionAllowlist
+      ? findSessionAllowlistViolation(rules, current)
+      : hasAllowlistMode
+        ? findAllowlistViolation(rules, current)
+        : rules.blockedApps.find((app) => matchesAppRule(app, current));
 
     if (blocked) {
       this.store.addUsageEvent({
@@ -98,6 +101,8 @@ export class WindowsMonitor {
         target: blocked.displayName,
         profileId: blocked.profileId,
         detail: hasAllowlistMode
+          ? `${current.title || current.executable} is not in the active allowlist.`
+          : hasSessionAllowlist
           ? `${current.title || current.executable} is not in the active allowlist.`
           : current.title || current.executable
       });
@@ -162,6 +167,22 @@ export class WindowsMonitor {
     }
     this.blockedWindow = undefined;
   }
+}
+
+function findSessionAllowlistViolation(
+  rules: ActiveRules,
+  current: { executable: string; title: string; path?: string }
+): BlockedApp | undefined {
+  if (isProtectedProcess(current)) return undefined;
+  if (rules.focusSessionAllowedApps.some((app) => matchesAppRule(app, current))) return undefined;
+  return {
+    id: "session-allowlist-violation",
+    profileId: rules.activeFocusSession?.profileId ?? rules.activeProfileIds[0] ?? "",
+    displayName: current.executable,
+    executable: current.executable,
+    path: current.path,
+    enabled: true
+  };
 }
 
 type ForegroundProcess =

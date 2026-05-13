@@ -58,6 +58,27 @@ type Confirmation = {
 type NewProfileDraft = {
   name: string;
   appPolicy: AppPolicy;
+  conditionType: "manual" | "schedule" | "quick-block" | "usage-limit";
+  scheduleLabel: string;
+  scheduleDays: Weekday[];
+  scheduleStart: string;
+  scheduleEnd: string;
+  quickBlockMinutes: number;
+  usageLimitScope: "daily" | "hourly";
+  usageLimitMinutes: number;
+  step: 1 | 2 | 3 | 4 | 5;
+};
+
+type FocusSessionDraft = {
+  mode: "duration" | "pomodoro";
+  durationMinutes: number;
+  focusMinutes: number;
+  breakMinutes: number;
+  rounds: number;
+  allowedApps: SelectedAppExecutable[];
+  wallpaperType: "default" | "solid";
+  wallpaperValue: string;
+  showPauseButton: boolean;
 };
 
 function App() {
@@ -73,6 +94,18 @@ function App() {
   const [runningApps, setRunningApps] = useState<SelectedAppExecutable[]>([]);
   const [showRunningApps, setShowRunningApps] = useState(false);
   const [newProfileDraft, setNewProfileDraft] = useState<NewProfileDraft>();
+  const [showFocusSetup, setShowFocusSetup] = useState(false);
+  const [focusSessionDraft, setFocusSessionDraft] = useState<FocusSessionDraft>({
+    mode: "duration",
+    durationMinutes: 45,
+    focusMinutes: 25,
+    breakMinutes: 5,
+    rounds: 4,
+    allowedApps: [],
+    wallpaperType: "default",
+    wallpaperValue: "#0f1724",
+    showPauseButton: true
+  });
 
   const selectedProfile = useMemo(
     () => state?.profiles.find((profile) => profile.id === selectedProfileId) ?? state?.profiles[0],
@@ -137,9 +170,41 @@ function App() {
       strictMode: "off",
       createdAt: new Date().toISOString()
     };
-    setNewProfileDraft(undefined);
-    setSelectedProfileId(profile.id);
     await saveProfile(profile);
+    setSelectedProfileId(profile.id);
+    await window.focusApi.saveProfileCondition({
+      id: createId("condition"),
+      profileId: profile.id,
+      type: newProfileDraft.conditionType,
+      enabled: true,
+      ...(newProfileDraft.conditionType === "quick-block"
+        ? {
+            startsAt: new Date().toISOString(),
+            endsAt: new Date(Date.now() + newProfileDraft.quickBlockMinutes * 60_000).toISOString()
+          }
+        : {}),
+      ...(newProfileDraft.conditionType === "usage-limit"
+        ? {
+            limitScope: newProfileDraft.usageLimitScope,
+            limitMinutes: newProfileDraft.usageLimitMinutes
+          }
+        : {})
+    });
+    if (newProfileDraft.conditionType === "schedule") {
+      await window.focusApi.saveSchedule({
+        id: createId("schedule"),
+        profileId: profile.id,
+        label: newProfileDraft.scheduleLabel.trim() || "Focus schedule",
+        days: newProfileDraft.scheduleDays,
+        startTime: newProfileDraft.scheduleStart,
+        endTime: newProfileDraft.scheduleEnd,
+        enabled: true
+      });
+    } else if (newProfileDraft.conditionType === "quick-block") {
+      await window.focusApi.startFocusSession(profile.id, newProfileDraft.quickBlockMinutes);
+    }
+    setNewProfileDraft(undefined);
+    await refreshLight();
   }
 
   async function addSite() {
@@ -212,8 +277,46 @@ function App() {
   function openProfileCreator() {
     setNewProfileDraft({
       name: `Profile ${(state?.profiles.length ?? 0) + 1}`,
-      appPolicy: "blocklist"
+      appPolicy: "blocklist",
+      conditionType: "manual",
+      scheduleLabel: "Weekday focus",
+      scheduleDays: [1, 2, 3, 4, 5],
+      scheduleStart: "09:00",
+      scheduleEnd: "17:00",
+      quickBlockMinutes: 60,
+      usageLimitScope: "daily",
+      usageLimitMinutes: 60,
+      step: 1
     });
+  }
+
+  async function startConfiguredFocusSession() {
+    if (!selectedProfile) return;
+    const allowedApps: AllowedApp[] = focusSessionDraft.allowedApps.map((app) => ({
+      id: createId("app"),
+      profileId: selectedProfile.id,
+      displayName: app.displayName,
+      executable: app.executable,
+      path: app.path,
+      enabled: true
+    }));
+    setState(
+      await window.focusApi.startFocusSession({
+        profileId: selectedProfile.id,
+        mode: focusSessionDraft.mode,
+        durationMinutes: focusSessionDraft.durationMinutes,
+        focusMinutes: focusSessionDraft.focusMinutes,
+        breakMinutes: focusSessionDraft.breakMinutes,
+        rounds: focusSessionDraft.rounds,
+        allowedApps,
+        wallpaperType: focusSessionDraft.wallpaperType,
+        wallpaperValue: focusSessionDraft.wallpaperValue,
+        showPauseButton: locked ? false : focusSessionDraft.showPauseButton,
+        strict: locked
+      })
+    );
+    setShowFocusSetup(false);
+    await refreshLight();
   }
 
   function changeAppPolicy(appPolicy: AppPolicy) {
@@ -338,20 +441,6 @@ function App() {
           </div>
         </div>
 
-        <nav className="profile-list">
-          {state.profiles.map((profile) => (
-            <button
-              className={`profile-button ${profile.id === selectedProfile.id ? "active" : ""}`}
-              key={profile.id}
-              onClick={() => setSelectedProfileId(profile.id)}
-            >
-              <span className="profile-dot" style={{ background: profile.color }} />
-              <span>{profile.name}</span>
-              {isStrictLocked(profile.strictUntil) && <Lock size={14} />}
-            </button>
-          ))}
-        </nav>
-
         <div className="side-nav">
           <button className={`nav-button ${view === "dashboard" ? "active" : ""}`} onClick={() => setView("dashboard")}>
             <LayoutGrid size={16} />
@@ -362,11 +451,6 @@ function App() {
             Settings
           </button>
         </div>
-
-        <button className="secondary wide" onClick={openProfileCreator}>
-          <Plus size={16} />
-          Profile
-        </button>
 
         <div className="helper-card">
           <div className="helper-title">
@@ -444,23 +528,39 @@ function App() {
             </section>
 
             <section className="content-grid">
-          <Panel title="Focus Sessions" icon={<Clock3 size={18} />}>
-            <div className="quick-buttons">
-              {[15, 30, 60, 120].map((minutes) => (
+          <Panel title="Profiles" icon={<Shield size={18} />} className="span-2">
+            <div className="topbar-actions">
+              <button className="primary" onClick={openProfileCreator}>
+                <Plus size={16} />
+                Add profile
+              </button>
+            </div>
+            <div className="profile-grid">
+              {state.profiles.map((profile) => (
                 <button
-                  className="secondary"
-                  key={minutes}
-                  onClick={() =>
-                    void window.focusApi.startFocusSession(selectedProfile.id, minutes).then(async (nextState) => {
-                      setState(nextState);
-                      await refreshLight();
-                    })
-                  }
+                  key={profile.id}
+                  className={profile.id === selectedProfile.id ? "profile-card active" : "profile-card"}
+                  onClick={() => setSelectedProfileId(profile.id)}
                 >
-                  {minutes}m
+                  <div className="profile-card-head">
+                    <span className="profile-dot" style={{ background: profile.color }} />
+                    <strong>{profile.name}</strong>
+                    {isStrictLocked(profile.strictUntil) && <Lock size={14} />}
+                  </div>
+                  <p>{profile.appPolicy === "allowlist" ? "Allowlist mode" : "Blocklist mode"}</p>
+                  <p>
+                    {state.schedules.filter((schedule) => schedule.profileId === profile.id && schedule.enabled).length} active schedule(s)
+                  </p>
                 </button>
               ))}
             </div>
+          </Panel>
+
+          <Panel title="Focus Sessions" icon={<Clock3 size={18} />}>
+            <button className="primary compact" onClick={() => setShowFocusSetup(true)}>
+              <Clock3 size={16} />
+              Start focus session
+            </button>
             <div className="session-list">
               {profileSessions.map((session) => (
                 <div className="session-row" key={session.id}>
@@ -804,11 +904,22 @@ function App() {
         />
       )}
       {newProfileDraft && (
-        <CreateProfileDialog
+        <CreateProfileWizard
           draft={newProfileDraft}
           onChange={setNewProfileDraft}
           onCancel={() => setNewProfileDraft(undefined)}
           onCreate={() => void addProfile()}
+        />
+      )}
+      {showFocusSetup && (
+        <FocusSessionSetupDialog
+          draft={focusSessionDraft}
+          strictLocked={locked}
+          onChange={setFocusSessionDraft}
+          onCancel={() => setShowFocusSetup(false)}
+          onStart={() => void startConfiguredFocusSession()}
+          onPickRunningApps={() => void showRunningAppPicker()}
+          runningApps={runningApps}
         />
       )}
     </main>
@@ -885,7 +996,7 @@ function ConfirmationDialog({
   );
 }
 
-function CreateProfileDialog({
+function CreateProfileWizard({
   draft,
   onChange,
   onCancel,
@@ -901,38 +1012,123 @@ function CreateProfileDialog({
       <section className="confirm-dialog profile-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-create-title">
         <div>
           <p className="eyebrow">New profile</p>
-          <h2 id="profile-create-title">Choose your app mode</h2>
-          <p>
-            This controls app enforcement during schedules and focus sessions. Background processes are not targeted.
-          </p>
+          <h2 id="profile-create-title">Create profile (Step {draft.step}/5)</h2>
         </div>
-        <label>
-          Profile name
-          <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
-        </label>
-        <div className="mode-options">
-          <button
-            className={draft.appPolicy === "blocklist" ? "mode-card active" : "mode-card"}
-            onClick={() => onChange({ ...draft, appPolicy: "blocklist" })}
-          >
-            <strong>Blocklist</strong>
-            <span>Close only the apps you add to the blocked list.</span>
-          </button>
-          <button
-            className={draft.appPolicy === "allowlist" ? "mode-card active" : "mode-card"}
-            onClick={() => onChange({ ...draft, appPolicy: "allowlist" })}
-          >
-            <strong>Allowlist</strong>
-            <span>Allow selected apps and close other foreground apps.</span>
-          </button>
-        </div>
+        {draft.step === 1 && (
+          <label>
+            Profile name
+            <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+          </label>
+        )}
+        {draft.step === 2 && (
+          <div className="mode-options">
+            <button
+              className={draft.appPolicy === "blocklist" ? "mode-card active" : "mode-card"}
+              onClick={() => onChange({ ...draft, appPolicy: "blocklist" })}
+            >
+              <strong>Blocklist</strong>
+              <span>Close only the apps you add to the blocked list.</span>
+            </button>
+            <button
+              className={draft.appPolicy === "allowlist" ? "mode-card active" : "mode-card"}
+              onClick={() => onChange({ ...draft, appPolicy: "allowlist" })}
+            >
+              <strong>Allowlist</strong>
+              <span>Allow selected apps and close other foreground apps.</span>
+            </button>
+          </div>
+        )}
+        {draft.step === 3 && (
+          <div className="mode-options">
+            {(["manual", "schedule", "quick-block", "usage-limit"] as const).map((condition) => (
+              <button
+                key={condition}
+                className={draft.conditionType === condition ? "mode-card active" : "mode-card"}
+                onClick={() => onChange({ ...draft, conditionType: condition })}
+              >
+                <strong>{condition.replace("-", " ")}</strong>
+              </button>
+            ))}
+          </div>
+        )}
+        {draft.step === 4 && (
+          <div className="settings-grid">
+            {draft.conditionType === "schedule" && (
+              <>
+                <label>
+                  Schedule label
+                  <input value={draft.scheduleLabel} onChange={(event) => onChange({ ...draft, scheduleLabel: event.target.value })} />
+                </label>
+                <label>
+                  Start
+                  <input type="time" value={draft.scheduleStart} onChange={(event) => onChange({ ...draft, scheduleStart: event.target.value })} />
+                </label>
+                <label>
+                  End
+                  <input type="time" value={draft.scheduleEnd} onChange={(event) => onChange({ ...draft, scheduleEnd: event.target.value })} />
+                </label>
+              </>
+            )}
+            {draft.conditionType === "quick-block" && (
+              <label>
+                Quick block minutes
+                <input
+                  type="number"
+                  min={5}
+                  max={720}
+                  value={draft.quickBlockMinutes}
+                  onChange={(event) => onChange({ ...draft, quickBlockMinutes: Number(event.target.value) || 60 })}
+                />
+              </label>
+            )}
+            {draft.conditionType === "usage-limit" && (
+              <>
+                <label>
+                  Limit scope
+                  <select value={draft.usageLimitScope} onChange={(event) => onChange({ ...draft, usageLimitScope: event.target.value as "daily" | "hourly" })}>
+                    <option value="daily">Daily</option>
+                    <option value="hourly">Hourly</option>
+                  </select>
+                </label>
+                <label>
+                  Limit minutes
+                  <input
+                    type="number"
+                    min={5}
+                    max={240}
+                    value={draft.usageLimitMinutes}
+                    onChange={(event) => onChange({ ...draft, usageLimitMinutes: Number(event.target.value) || 60 })}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        )}
+        {draft.step === 5 && (
+          <div className="muted">
+            <p>Name: {draft.name || "Untitled profile"}</p>
+            <p>Mode: {draft.appPolicy}</p>
+            <p>Condition: {draft.conditionType}</p>
+          </div>
+        )}
         <div className="confirm-actions">
           <button className="secondary" onClick={onCancel}>
             Cancel
           </button>
-          <button className="primary" onClick={onCreate}>
-            Create profile
-          </button>
+          {draft.step > 1 && (
+            <button className="secondary" onClick={() => onChange({ ...draft, step: (draft.step - 1) as NewProfileDraft["step"] })}>
+              Back
+            </button>
+          )}
+          {draft.step < 5 ? (
+            <button className="primary" onClick={() => onChange({ ...draft, step: (draft.step + 1) as NewProfileDraft["step"] })}>
+              Next
+            </button>
+          ) : (
+            <button className="primary" onClick={onCreate}>
+              Create profile
+            </button>
+          )}
         </div>
       </section>
     </div>
@@ -965,6 +1161,173 @@ function RuleTable({
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+function FocusSessionSetupDialog({
+  draft,
+  strictLocked,
+  runningApps,
+  onChange,
+  onCancel,
+  onStart,
+  onPickRunningApps
+}: {
+  draft: FocusSessionDraft;
+  strictLocked: boolean;
+  runningApps: SelectedAppExecutable[];
+  onChange: (draft: FocusSessionDraft) => void;
+  onCancel: () => void;
+  onStart: () => void;
+  onPickRunningApps: () => void;
+}) {
+  function toggleAllowedApp(app: SelectedAppExecutable) {
+    const exists = draft.allowedApps.some((item) => item.executable === app.executable && item.path === app.path);
+    onChange({
+      ...draft,
+      allowedApps: exists
+        ? draft.allowedApps.filter((item) => !(item.executable === app.executable && item.path === app.path))
+        : [...draft.allowedApps, app]
+    });
+  }
+
+  return (
+    <div className="confirm-backdrop" role="presentation">
+      <section className="confirm-dialog profile-dialog" role="dialog" aria-modal="true" aria-labelledby="focus-session-title">
+        <div>
+          <p className="eyebrow">Focus session</p>
+          <h2 id="focus-session-title">Create session</h2>
+        </div>
+        <div className="mode-options">
+          <button className={draft.mode === "duration" ? "mode-card active" : "mode-card"} onClick={() => onChange({ ...draft, mode: "duration" })}>
+            <strong>Duration</strong>
+          </button>
+          <button className={draft.mode === "pomodoro" ? "mode-card active" : "mode-card"} onClick={() => onChange({ ...draft, mode: "pomodoro" })}>
+            <strong>Pomodoro</strong>
+          </button>
+        </div>
+        <div className="settings-grid">
+          {draft.mode === "duration" ? (
+            <label>
+              Duration (minutes)
+              <input
+                type="number"
+                min={5}
+                max={720}
+                value={draft.durationMinutes}
+                onChange={(event) => onChange({ ...draft, durationMinutes: Number(event.target.value) || 45 })}
+              />
+            </label>
+          ) : (
+            <>
+              <label>
+                Focus (minutes)
+                <input
+                  type="number"
+                  min={5}
+                  max={120}
+                  value={draft.focusMinutes}
+                  onChange={(event) => onChange({ ...draft, focusMinutes: Number(event.target.value) || 25 })}
+                />
+              </label>
+              <label>
+                Break (minutes)
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={draft.breakMinutes}
+                  onChange={(event) => onChange({ ...draft, breakMinutes: Number(event.target.value) || 5 })}
+                />
+              </label>
+              <label>
+                Rounds
+                <input
+                  type="number"
+                  min={1}
+                  max={12}
+                  value={draft.rounds}
+                  onChange={(event) => onChange({ ...draft, rounds: Number(event.target.value) || 4 })}
+                />
+              </label>
+            </>
+          )}
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={strictLocked ? false : draft.showPauseButton}
+              disabled={strictLocked}
+              onChange={(event) => onChange({ ...draft, showPauseButton: event.target.checked })}
+            />
+            Show pause button
+          </label>
+          <label>
+            Wallpaper
+            <select
+              value={draft.wallpaperType}
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  wallpaperType: event.target.value as "default" | "solid"
+                })
+              }
+            >
+              <option value="default">Default</option>
+              <option value="solid">Solid color</option>
+            </select>
+          </label>
+          {draft.wallpaperType === "solid" && (
+            <label>
+              Color
+              <input
+                type="color"
+                value={draft.wallpaperValue}
+                onChange={(event) => onChange({ ...draft, wallpaperValue: event.target.value })}
+              />
+            </label>
+          )}
+        </div>
+        <div>
+          <div className="topbar-actions">
+            <button className="secondary" onClick={onPickRunningApps}>
+              <AppWindow size={16} />
+              Load running apps
+            </button>
+          </div>
+          {runningApps.length > 0 && (
+            <div className="running-app-list">
+              {runningApps.map((runningApp) => {
+                const selected = draft.allowedApps.some(
+                  (item) => item.executable === runningApp.executable && item.path === runningApp.path
+                );
+                return (
+                  <button
+                    className={selected ? "running-app-row mode-card active" : "running-app-row"}
+                    key={`${runningApp.executable}-${runningApp.path ?? runningApp.displayName}`}
+                    onClick={() => toggleAllowedApp(runningApp)}
+                  >
+                    <strong>{runningApp.displayName}</strong>
+                    <span>{runningApp.executable}</span>
+                    <small>{runningApp.path || runningApp.title || "Path unavailable"}</small>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <p className="muted">
+          Allowed apps selected: {draft.allowedApps.length}. {draft.allowedApps.length === 0 ? "Only the focus screen will remain usable." : ""}
+        </p>
+        <div className="confirm-actions">
+          <button className="secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" onClick={onStart}>
+            Start session
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
