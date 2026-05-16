@@ -8,6 +8,7 @@ import type {
   BlockedApp,
   BlockedSite,
   FocusSessionConfig,
+  FocusSessionPreset,
   FocusSession,
   Profile,
   ProfileCondition,
@@ -21,6 +22,11 @@ const nowIso = () => new Date().toISOString();
 function clampInteger(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isInteger(value)) return fallback;
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizePositiveNumber(value: number | undefined, fallback: number, min = 1, max = 10_000): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value as number));
 }
 
 function defaultSettings(): AppSettings {
@@ -80,6 +86,7 @@ function defaultState(): AppState {
       }
     ],
     profileConditions: [],
+    focusSessionPresets: [],
     focusSessions: [],
     usageEvents: [],
     settings: defaultSettings()
@@ -247,17 +254,21 @@ export class FocusStore {
             strict: false
           }
         : profileIdOrConfig;
+    const rounds = normalizePositiveNumber(config.rounds, 1, 1, 100);
+    const focusMinutes = normalizePositiveNumber(config.focusMinutes, 25, 1, 600);
+    const breakMinutes = normalizePositiveNumber(config.breakMinutes, 5, 0, 180);
+    const durationMinutes = normalizePositiveNumber(config.durationMinutes, 30, 1, 1440);
     const totalMinutes =
       config.mode === "pomodoro"
-        ? Math.max(1, (config.rounds ?? 1) * (config.focusMinutes ?? 25) + Math.max(0, (config.rounds ?? 1) - 1) * (config.breakMinutes ?? 5))
-        : Math.max(1, config.durationMinutes ?? 30);
+        ? Math.max(1, rounds * focusMinutes + Math.max(0, rounds - 1) * breakMinutes)
+        : durationMinutes;
     const session: FocusSession = {
       id: createId("session"),
       profileId: config.profileId,
       mode: config.mode,
-      focusMinutes: config.focusMinutes,
-      breakMinutes: config.breakMinutes,
-      rounds: config.rounds,
+      focusMinutes,
+      breakMinutes,
+      rounds,
       currentRound: 1,
       allowedApps: config.allowedApps,
       wallpaperType: config.wallpaperType,
@@ -270,6 +281,21 @@ export class FocusStore {
     };
     this.state.focusSessions.push(session);
     this.addEvent({ type: "focus-started", target: `${totalMinutes} minute session`, profileId: config.profileId });
+    this.persist();
+    return this.getState();
+  }
+
+  saveFocusSessionPreset(preset: FocusSessionPreset): AppState {
+    this.upsert("focusSessionPresets", {
+      ...preset,
+      name: preset.name.trim() || "Session preset",
+      createdAt: preset.createdAt || nowIso()
+    });
+    return this.getState();
+  }
+
+  deleteFocusSessionPreset(id: string): AppState {
+    this.state.focusSessionPresets = this.state.focusSessionPresets.filter((preset) => preset.id !== id);
     this.persist();
     return this.getState();
   }
@@ -352,6 +378,7 @@ export class FocusStore {
           enabled: Boolean(schedule.enabled)
         })),
         profileConditions: parsed.profileConditions ?? [],
+        focusSessionPresets: parsed.focusSessionPresets ?? [],
         focusSessions: (parsed.focusSessions ?? []).map((session) => ({
           ...session,
           active: Boolean(session.active)
@@ -370,7 +397,7 @@ export class FocusStore {
     fs.writeFileSync(this.dataPath, JSON.stringify(this.state, null, 2), "utf8");
   }
 
-  private upsert<K extends "profiles" | "blockedApps" | "allowedApps" | "blockedSites" | "schedules" | "profileConditions">(
+  private upsert<K extends "profiles" | "blockedApps" | "allowedApps" | "blockedSites" | "schedules" | "profileConditions" | "focusSessionPresets">(
     collection: K,
     value: AppState[K][number]
   ): void {

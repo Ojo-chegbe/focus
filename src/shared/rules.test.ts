@@ -72,6 +72,7 @@ describe("getActiveRules", () => {
       schedules: [],
       focusSessions: [],
       profileConditions: [],
+      focusSessionPresets: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -126,6 +127,7 @@ describe("getActiveRules", () => {
         }
       ],
       profileConditions: [],
+      focusSessionPresets: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -171,6 +173,7 @@ describe("getActiveRules", () => {
       ],
       focusSessions: [],
       profileConditions: [],
+      focusSessionPresets: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -223,6 +226,7 @@ describe("getActiveRules", () => {
         }
       ],
       profileConditions: [],
+      focusSessionPresets: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -266,6 +270,7 @@ describe("getActiveRules", () => {
       ],
       focusSessions: [],
       profileConditions: [],
+      focusSessionPresets: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,
@@ -302,6 +307,7 @@ describe("getActiveRules", () => {
       schedules: [],
       focusSessions: [],
       profileConditions: [],
+      focusSessionPresets: [],
       usageEvents: [],
       settings: {
         launchAtLogin: false,

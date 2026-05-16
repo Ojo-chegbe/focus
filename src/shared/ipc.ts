@@ -1,6 +1,7 @@
 import type {
   ActiveRules,
   FocusSessionConfig,
+  FocusSessionPreset,
   AppState,
   AppSettings,
   AllowedApp,
@@ -19,6 +20,7 @@ export interface AppApi {
   saveProfile(profile: Profile): Promise<AppState>;
   deleteProfile(profileId: string): Promise<AppState>;
   selectAppExecutable(): Promise<SelectedAppExecutable | undefined>;
+  selectWallpaperImage(): Promise<string | undefined>;
   listRunningApps(): Promise<SelectedAppExecutable[]>;
   saveBlockedApp(app: BlockedApp): Promise<AppState>;
   deleteBlockedApp(id: string): Promise<AppState>;
@@ -29,6 +31,8 @@ export interface AppApi {
   saveSchedule(schedule: Schedule): Promise<AppState>;
   deleteSchedule(id: string): Promise<AppState>;
   startFocusSession(profileIdOrConfig: string | FocusSessionConfig, minutes?: number): Promise<AppState>;
+  saveFocusSessionPreset(preset: FocusSessionPreset): Promise<AppState>;
+  deleteFocusSessionPreset(id: string): Promise<AppState>;
   endFocusSession(id: string): Promise<AppState>;
   pauseFocusSession(id: string): Promise<AppState>;
   resumeFocusSession(id: string): Promise<AppState>;
@@ -59,6 +63,7 @@ export const channels = {
   saveProfile: "profile:save",
   deleteProfile: "profile:delete",
   selectAppExecutable: "blocked-app:select-executable",
+  selectWallpaperImage: "focus-session:select-wallpaper-image",
   listRunningApps: "blocked-app:list-running",
   saveBlockedApp: "blocked-app:save",
   deleteBlockedApp: "blocked-app:delete",
@@ -69,6 +74,8 @@ export const channels = {
   saveSchedule: "schedule:save",
   deleteSchedule: "schedule:delete",
   startFocusSession: "focus-session:start",
+  saveFocusSessionPreset: "focus-session-preset:save",
+  deleteFocusSessionPreset: "focus-session-preset:delete",
   endFocusSession: "focus-session:end",
   pauseFocusSession: "focus-session:pause",
   resumeFocusSession: "focus-session:resume",

@@ -6,7 +6,8 @@
   "author": "Ojochegbe",
   "main": "dist/main/index.js",
   "scripts": {
-    "dev": "concurrently \"vite --configLoader runner --host 127.0.0.1\" \"node scripts/start-electron-dev.cjs\"",
+    "dev": "npm.cmd run build:main && concurrently \"vite --configLoader runner --host 127.0.0.1\" \"node scripts/start-electron-dev.cjs\"",
+    "build:main": "tsc -p tsconfig.main.json",
     "build": "tsc -p tsconfig.main.json && vite --configLoader runner build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
     "test": "vitest run",

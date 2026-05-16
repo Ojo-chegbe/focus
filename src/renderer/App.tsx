@@ -32,7 +32,8 @@ import type {
   Schedule,
   UsageEvent,
   UsageSummary,
-  Weekday
+  Weekday,
+  FocusSessionPreset
 } from "../shared/models";
 import type { SelectedAppExecutable } from "../shared/ipc";
 import { createId, isScheduleActive, isStrictLocked, normalizeDomain } from "../shared/rules";
@@ -66,7 +67,8 @@ type NewProfileDraft = {
   quickBlockMinutes: number;
   usageLimitScope: "daily" | "hourly";
   usageLimitMinutes: number;
-  step: 1 | 2 | 3 | 4 | 5;
+  apps: SelectedAppExecutable[];
+  appInput: string;
 };
 
 type FocusSessionDraft = {
@@ -76,10 +78,19 @@ type FocusSessionDraft = {
   breakMinutes: number;
   rounds: number;
   allowedApps: SelectedAppExecutable[];
-  wallpaperType: "default" | "solid";
+  wallpaperType: "default" | "solid" | "custom";
   wallpaperValue: string;
   showPauseButton: boolean;
+  presetName: string;
 };
+
+const SidebarIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4.16699 5.83331H15.8337" stroke="currentColor" strokeLinecap="round" />
+    <path d="M4.16699 10H15.8337" stroke="currentColor" strokeLinecap="round" />
+    <path d="M4.16699 14.1667H15.8337" stroke="currentColor" strokeLinecap="round" />
+  </svg>
+);
 
 function App() {
   const [view, setView] = useState<"dashboard" | "settings">("dashboard");
@@ -94,6 +105,9 @@ function App() {
   const [runningApps, setRunningApps] = useState<SelectedAppExecutable[]>([]);
   const [showRunningApps, setShowRunningApps] = useState(false);
   const [newProfileDraft, setNewProfileDraft] = useState<NewProfileDraft>();
+  const [toast, setToast] = useState<string>();
+  const [strictLockMinutes, setStrictLockMinutes] = useState(60);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showFocusSetup, setShowFocusSetup] = useState(false);
   const [focusSessionDraft, setFocusSessionDraft] = useState<FocusSessionDraft>({
     mode: "duration",
@@ -104,7 +118,8 @@ function App() {
     allowedApps: [],
     wallpaperType: "default",
     wallpaperValue: "#0f1724",
-    showPauseButton: true
+    showPauseButton: true,
+    presetName: ""
   });
 
   const selectedProfile = useMemo(
@@ -203,7 +218,26 @@ function App() {
     } else if (newProfileDraft.conditionType === "quick-block") {
       await window.focusApi.startFocusSession(profile.id, newProfileDraft.quickBlockMinutes);
     }
+    // Save apps added during profile creation
+    for (const app of newProfileDraft.apps) {
+      const appRule = {
+        id: createId("app"),
+        profileId: profile.id,
+        displayName: app.displayName,
+        executable: app.executable,
+        path: app.path,
+        enabled: true
+      };
+      setState(
+        newProfileDraft.appPolicy === "allowlist"
+          ? await window.focusApi.saveAllowedApp(appRule)
+          : await window.focusApi.saveBlockedApp(appRule)
+      );
+    }
     setNewProfileDraft(undefined);
+    setRunningApps([]);
+    setToast(`"${profile.name}" created successfully`);
+    setTimeout(() => setToast(undefined), 3000);
     await refreshLight();
   }
 
@@ -276,7 +310,7 @@ function App() {
 
   function openProfileCreator() {
     setNewProfileDraft({
-      name: `Profile ${(state?.profiles.length ?? 0) + 1}`,
+      name: "",
       appPolicy: "blocklist",
       conditionType: "manual",
       scheduleLabel: "Weekday focus",
@@ -286,11 +320,46 @@ function App() {
       quickBlockMinutes: 60,
       usageLimitScope: "daily",
       usageLimitMinutes: 60,
-      step: 1
+      apps: [],
+      appInput: ""
     });
   }
 
   async function startConfiguredFocusSession() {
+    if (!selectedProfile) return;
+    try {
+      const allowedApps: AllowedApp[] = focusSessionDraft.allowedApps.map((app) => ({
+        id: createId("app"),
+        profileId: selectedProfile.id,
+        displayName: app.displayName,
+        executable: app.executable,
+        path: app.path,
+        enabled: true
+      }));
+      setState(
+        await window.focusApi.startFocusSession({
+          profileId: selectedProfile.id,
+          mode: focusSessionDraft.mode,
+          durationMinutes: focusSessionDraft.durationMinutes,
+          focusMinutes: focusSessionDraft.focusMinutes,
+          breakMinutes: focusSessionDraft.breakMinutes,
+          rounds: focusSessionDraft.rounds,
+          allowedApps,
+          wallpaperType: focusSessionDraft.wallpaperType,
+          wallpaperValue: focusSessionDraft.wallpaperValue,
+          showPauseButton: locked ? false : focusSessionDraft.showPauseButton,
+          strict: locked
+        })
+      );
+      setShowFocusSetup(false);
+      await refreshLight();
+      setError(undefined);
+    } catch (sessionError) {
+      setError(sessionError instanceof Error ? sessionError.message : String(sessionError));
+    }
+  }
+
+  async function saveCurrentSessionPreset() {
     if (!selectedProfile) return;
     const allowedApps: AllowedApp[] = focusSessionDraft.allowedApps.map((app) => ({
       id: createId("app"),
@@ -300,47 +369,58 @@ function App() {
       path: app.path,
       enabled: true
     }));
-    setState(
-      await window.focusApi.startFocusSession({
-        profileId: selectedProfile.id,
-        mode: focusSessionDraft.mode,
-        durationMinutes: focusSessionDraft.durationMinutes,
-        focusMinutes: focusSessionDraft.focusMinutes,
-        breakMinutes: focusSessionDraft.breakMinutes,
-        rounds: focusSessionDraft.rounds,
-        allowedApps,
-        wallpaperType: focusSessionDraft.wallpaperType,
-        wallpaperValue: focusSessionDraft.wallpaperValue,
-        showPauseButton: locked ? false : focusSessionDraft.showPauseButton,
-        strict: locked
-      })
-    );
-    setShowFocusSetup(false);
+    const preset: FocusSessionPreset = {
+      id: createId("preset"),
+      name: focusSessionDraft.presetName.trim() || `Preset ${new Date().toLocaleTimeString()}`,
+      profileId: selectedProfile.id,
+      mode: focusSessionDraft.mode,
+      durationMinutes: focusSessionDraft.durationMinutes,
+      focusMinutes: focusSessionDraft.focusMinutes,
+      breakMinutes: focusSessionDraft.breakMinutes,
+      rounds: focusSessionDraft.rounds,
+      allowedApps,
+      wallpaperType: focusSessionDraft.wallpaperType,
+      wallpaperValue: focusSessionDraft.wallpaperValue,
+      showPauseButton: focusSessionDraft.showPauseButton,
+      createdAt: new Date().toISOString()
+    };
+    setState(await window.focusApi.saveFocusSessionPreset(preset));
+    setToast(`Preset "${preset.name}" saved`);
+    setTimeout(() => setToast(undefined), 2500);
     await refreshLight();
   }
 
-  function changeAppPolicy(appPolicy: AppPolicy) {
-    if (!selectedProfile || selectedProfile.appPolicy === appPolicy || locked) return;
-    if (appPolicy === "allowlist") {
-      confirmAction({
-        title: "Switch to allowlist mode?",
-        message:
-          "Only apps in this profile's allowed list will be usable during active focus time. Other foreground apps may be closed.",
-        confirmLabel: "Switch mode",
-        onConfirm: async () => {
-          await saveProfile({ ...selectedProfile, appPolicy });
-        }
-      });
-      return;
-    }
-    confirmAction({
-      title: "Switch to blocklist mode?",
-      message: "This profile will stop closing unlisted apps and will only close apps in its blocked list.",
-      confirmLabel: "Switch mode",
-      onConfirm: async () => {
-        await saveProfile({ ...selectedProfile, appPolicy });
-      }
+  function applyPresetToDraft(preset: FocusSessionPreset) {
+    setFocusSessionDraft({
+      mode: preset.mode,
+      durationMinutes: preset.durationMinutes ?? 45,
+      focusMinutes: preset.focusMinutes ?? 25,
+      breakMinutes: preset.breakMinutes ?? 5,
+      rounds: preset.rounds ?? 4,
+      allowedApps: preset.allowedApps.map((app) => ({
+        displayName: app.displayName,
+        executable: app.executable,
+        path: app.path
+      })),
+      wallpaperType: preset.wallpaperType,
+      wallpaperValue: preset.wallpaperValue,
+      showPauseButton: preset.showPauseButton,
+      presetName: preset.name
     });
+  }
+
+  async function pickCustomWallpaper() {
+    try {
+      const selected = await window.focusApi.selectWallpaperImage();
+      if (!selected) return;
+      setFocusSessionDraft((prev) => ({
+        ...prev,
+        wallpaperType: "custom",
+        wallpaperValue: selected
+      }));
+    } catch (wallpaperError) {
+      setError(wallpaperError instanceof Error ? wallpaperError.message : String(wallpaperError));
+    }
   }
 
   function confirmAction(confirmationRequest: Confirmation): void {
@@ -410,8 +490,8 @@ function App() {
   if (!state || !summary || !selectedProfile) {
     return (
       <main className="loading">
-        <Shield size={34} />
-        <span>Loading Focus...</span>
+        <Shield size={28} />
+        <span>Starting Focus…</span>
       </main>
     );
   }
@@ -429,26 +509,33 @@ function App() {
   const enabledScheduleCount = profileSchedules.filter((schedule) => schedule.enabled).length;
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
+    <main className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
+      <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
         <div className="brand">
           <div className="brand-mark">
-            <Shield size={22} />
+            <Shield size={18} />
           </div>
-          <div>
+          <div className="brand-copy">
             <h1>Focus</h1>
-            <p>Desktop blocker</p>
+            <p>Stay on track</p>
           </div>
+          <button
+            className="secondary icon-only sidebar-toggle"
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <SidebarIcon size={18} />
+          </button>
         </div>
 
         <div className="side-nav">
           <button className={`nav-button ${view === "dashboard" ? "active" : ""}`} onClick={() => setView("dashboard")}>
             <LayoutGrid size={16} />
-            Dashboard
+            <span>Dashboard</span>
           </button>
           <button className={`nav-button ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")}>
             <Settings size={16} />
-            Settings
+            <span>Settings</span>
           </button>
         </div>
 
@@ -457,8 +544,8 @@ function App() {
             {status?.lastError ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
             Helper
           </div>
-          <p>{status?.isElevated ? "Admin access available" : "Admin access needed for hosts blocking"}</p>
-          <p>{status?.activeRules.activeProfileNames.join(", ") || "No active profile right now"}</p>
+          <p>{status?.isElevated ? "Running with admin access" : "Needs admin for full site blocking"}</p>
+          <p>{status?.activeRules.activeProfileNames.join(", ") || "Everything’s quiet right now"}</p>
           {status && !status.isElevated && (
             <button
               className="primary wide"
@@ -489,10 +576,10 @@ function App() {
                 />
                 <p className="profile-activation-state">
                   {isProfileActiveNow
-                    ? `Blocking active now${activeReason ? ` (${formatActivationReason(activeReason)})` : ""}`
-                    : "Blocking idle now"}
-                  {" - "}
-                  {selectedProfile.appPolicy === "allowlist" ? "Allowlist mode" : "Blocklist mode"}
+                    ? `Active${activeReason ? ` · ${formatActivationReason(activeReason)}` : ""}`
+                    : "Idle"}
+                  {" · "}
+                  {selectedProfile.appPolicy === "allowlist" ? "Allowlist" : "Blocklist"}
                 </p>
               </div>
               <div className="topbar-actions">
@@ -584,7 +671,7 @@ function App() {
                   </button>
                 </div>
               ))}
-              {profileSessions.length === 0 && <p className="muted">No active manual session.</p>}
+              {profileSessions.length === 0 && <p className="muted">Start a session to begin blocking.</p>}
             </div>
           </Panel>
 
@@ -596,40 +683,39 @@ function App() {
                   {locked ? `Changes resume ${new Date(selectedProfile.strictUntil ?? "").toLocaleString()}` : "Lock edits during a focus block."}
                 </p>
               </div>
-              <button
-                className="primary"
-                disabled={locked}
-                onClick={() =>
-                  void window.focusApi.lockProfile(selectedProfile.id, 60).then(async (nextState) => {
-                    setState(nextState);
-                    await refreshLight();
-                  })
-                }
-              >
-                Lock 1h
-              </button>
+              <div className="strict-actions">
+                <label className="strict-minutes">
+                  <span>Minutes</span>
+                  <input
+                    type="number"
+                    min={5}
+                    max={1440}
+                    value={strictLockMinutes}
+                    disabled={locked}
+                    onChange={(event) => setStrictLockMinutes(Math.max(5, Math.min(1440, Number(event.target.value) || 60)))}
+                  />
+                </label>
+                <button
+                  className="primary"
+                  disabled={locked}
+                  onClick={() =>
+                    void window.focusApi.lockProfile(selectedProfile.id, strictLockMinutes).then(async (nextState) => {
+                      setState(nextState);
+                      await refreshLight();
+                    })
+                  }
+                >
+                  Lock
+                </button>
+              </div>
             </div>
           </Panel>
 
           <Panel title="App Mode" icon={<Shield size={18} />}>
-            <div className="mode-options">
-              <button
-                className={selectedProfile.appPolicy === "blocklist" ? "mode-card active" : "mode-card"}
-                disabled={locked}
-                onClick={() => changeAppPolicy("blocklist")}
-              >
-                <strong>Blocklist</strong>
-                <span>Close only the apps you select.</span>
-              </button>
-              <button
-                className={selectedProfile.appPolicy === "allowlist" ? "mode-card active" : "mode-card"}
-                disabled={locked}
-                onClick={() => changeAppPolicy("allowlist")}
-              >
-                <strong>Allowlist</strong>
-                <span>Allow selected apps. Close other foreground apps.</span>
-              </button>
-            </div>
+            <p className="muted">
+              This profile uses <strong>{selectedProfile.appPolicy === "allowlist" ? "Allowlist" : "Blocklist"}</strong> mode.
+              App mode is fixed after profile creation.
+            </p>
           </Panel>
 
           <Panel title="Website Blocking" icon={<Globe size={18} />} className="span-2">
@@ -801,7 +887,7 @@ function App() {
                   }
                 />
               ))}
-              {profileSchedules.length === 0 && <p className="empty">No schedules yet.</p>}
+              {profileSchedules.length === 0 && <p className="empty">Add a schedule to automate your focus blocks.</p>}
             </div>
           </Panel>
 
@@ -813,7 +899,7 @@ function App() {
                   <strong>{formatSeconds(app.seconds)}</strong>
                 </div>
               ))}
-              {summary.topApps.length === 0 && <p className="empty">Usage appears here after foreground app activity.</p>}
+              {summary.topApps.length === 0 && <p className="empty">App usage will appear here as you work.</p>}
             </div>
           </Panel>
 
@@ -909,18 +995,38 @@ function App() {
           onChange={setNewProfileDraft}
           onCancel={() => setNewProfileDraft(undefined)}
           onCreate={() => void addProfile()}
+          onPickRunningApps={() => void showRunningAppPicker()}
+          onCloseRunningApps={() => setRunningApps([])}
+          runningApps={runningApps}
         />
       )}
       {showFocusSetup && (
         <FocusSessionSetupDialog
           draft={focusSessionDraft}
           strictLocked={locked}
+          presets={state.focusSessionPresets.filter((preset) => preset.profileId === selectedProfile.id)}
           onChange={setFocusSessionDraft}
           onCancel={() => setShowFocusSetup(false)}
           onStart={() => void startConfiguredFocusSession()}
+          onSavePreset={() => void saveCurrentSessionPreset()}
+          onApplyPreset={applyPresetToDraft}
+          onDeletePreset={(id) =>
+            void window.focusApi.deleteFocusSessionPreset(id).then(async (nextState) => {
+              setState(nextState);
+              await refreshLight();
+            })
+          }
+          onPickCustomWallpaper={() => void pickCustomWallpaper()}
           onPickRunningApps={() => void showRunningAppPicker()}
+          onCloseRunningApps={() => setRunningApps([])}
           runningApps={runningApps}
         />
+      )}
+      {toast && (
+        <div className="toast">
+          <CheckCircle2 size={16} />
+          {toast}
+        </div>
       )}
     </main>
   );
@@ -1000,135 +1106,282 @@ function CreateProfileWizard({
   draft,
   onChange,
   onCancel,
-  onCreate
+  onCreate,
+  onPickRunningApps,
+  onCloseRunningApps,
+  runningApps
 }: {
   draft: NewProfileDraft;
   onChange: (draft: NewProfileDraft) => void;
   onCancel: () => void;
   onCreate: () => void;
+  onPickRunningApps: () => void;
+  onCloseRunningApps: () => void;
+  runningApps: SelectedAppExecutable[];
 }) {
+  function addAppFromInput() {
+    const trimmed = draft.appInput.trim();
+    if (!trimmed) return;
+    const fileName = trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
+    const executable = fileName.toLowerCase().endsWith(".exe") ? fileName.toLowerCase() : `${fileName.toLowerCase()}.exe`;
+    const displayName = fileName.replace(/\.exe$/i, "").trim() || executable.replace(/\.exe$/i, "");
+    const app: SelectedAppExecutable = {
+      displayName,
+      executable,
+      path: trimmed.includes("\\") || trimmed.includes("/") ? trimmed : undefined
+    };
+    if (!draft.apps.some((a) => a.executable === app.executable)) {
+      onChange({ ...draft, apps: [...draft.apps, app], appInput: "" });
+    } else {
+      onChange({ ...draft, appInput: "" });
+    }
+  }
+
+  function toggleApp(app: SelectedAppExecutable) {
+    const exists = draft.apps.some((a) => a.executable === app.executable && a.path === app.path);
+    onChange({
+      ...draft,
+      apps: exists
+        ? draft.apps.filter((a) => !(a.executable === app.executable && a.path === app.path))
+        : [...draft.apps, app]
+    });
+  }
+
+  function removeApp(app: SelectedAppExecutable) {
+    onChange({ ...draft, apps: draft.apps.filter((a) => a.executable !== app.executable) });
+  }
+  const conditionOptions = [
+    { value: "manual" as const, label: "Manual", desc: "Toggle on and off yourself" },
+    { value: "schedule" as const, label: "Schedule", desc: "Runs on set days and times" },
+    { value: "quick-block" as const, label: "Quick block", desc: "Block for a set duration" },
+    { value: "usage-limit" as const, label: "Usage limit", desc: "Cap your daily or hourly use" }
+  ];
+
   return (
     <div className="confirm-backdrop" role="presentation">
-      <section className="confirm-dialog profile-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-create-title">
-        <div>
-          <p className="eyebrow">New profile</p>
-          <h2 id="profile-create-title">Create profile (Step {draft.step}/5)</h2>
-        </div>
-        {draft.step === 1 && (
-          <label>
-            Profile name
-            <input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
-          </label>
-        )}
-        {draft.step === 2 && (
-          <div className="mode-options">
-            <button
-              className={draft.appPolicy === "blocklist" ? "mode-card active" : "mode-card"}
-              onClick={() => onChange({ ...draft, appPolicy: "blocklist" })}
-            >
-              <strong>Blocklist</strong>
-              <span>Close only the apps you add to the blocked list.</span>
-            </button>
-            <button
-              className={draft.appPolicy === "allowlist" ? "mode-card active" : "mode-card"}
-              onClick={() => onChange({ ...draft, appPolicy: "allowlist" })}
-            >
-              <strong>Allowlist</strong>
-              <span>Allow selected apps and close other foreground apps.</span>
-            </button>
+      <section className="confirm-dialog focus-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-create-title">
+        <div className="focus-dialog-header">
+          <div>
+            <p className="eyebrow">New profile</p>
+            <h2 id="profile-create-title">Create profile</h2>
           </div>
-        )}
-        {draft.step === 3 && (
-          <div className="mode-options">
-            {(["manual", "schedule", "quick-block", "usage-limit"] as const).map((condition) => (
+          <button className="secondary icon-only" onClick={onCancel} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="focus-form">
+          <label className="focus-field">
+            <span>Profile name</span>
+            <input
+              value={draft.name}
+              placeholder="e.g. Deep work, Study time"
+              autoFocus
+              onChange={(event) => onChange({ ...draft, name: event.target.value })}
+            />
+          </label>
+        </div>
+
+        <div className="profile-condition-section">
+          <span className="focus-apps-label">Activation</span>
+          <div className="profile-condition-grid">
+            {conditionOptions.map((opt) => (
               <button
-                key={condition}
-                className={draft.conditionType === condition ? "mode-card active" : "mode-card"}
-                onClick={() => onChange({ ...draft, conditionType: condition })}
+                key={opt.value}
+                className={`profile-condition-card ${draft.conditionType === opt.value ? "active" : ""}`}
+                onClick={() => onChange({ ...draft, conditionType: opt.value })}
               >
-                <strong>{condition.replace("-", " ")}</strong>
+                <strong>{opt.label}</strong>
+                <span>{opt.desc}</span>
               </button>
             ))}
           </div>
-        )}
-        {draft.step === 4 && (
-          <div className="settings-grid">
-            {draft.conditionType === "schedule" && (
-              <>
-                <label>
-                  Schedule label
-                  <input value={draft.scheduleLabel} onChange={(event) => onChange({ ...draft, scheduleLabel: event.target.value })} />
-                </label>
-                <label>
-                  Start
+
+          {draft.conditionType === "schedule" && (
+            <div className="profile-condition-details">
+              <label className="focus-field">
+                <span>Label</span>
+                <input value={draft.scheduleLabel} onChange={(event) => onChange({ ...draft, scheduleLabel: event.target.value })} />
+              </label>
+              <div className="focus-field">
+                <span>Days</span>
+                <div className="weekday-row">
+                  {weekdays.map((day) => (
+                    <button
+                      key={day.value}
+                      className={draft.scheduleDays.includes(day.value) ? "day active" : "day"}
+                      onClick={() => {
+                        const days = draft.scheduleDays.includes(day.value)
+                          ? draft.scheduleDays.filter((d) => d !== day.value)
+                          : [...draft.scheduleDays, day.value].sort();
+                        onChange({ ...draft, scheduleDays: days });
+                      }}
+                    >
+                      {day.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="focus-field-row">
+                <label className="focus-field">
+                  <span>Start</span>
                   <input type="time" value={draft.scheduleStart} onChange={(event) => onChange({ ...draft, scheduleStart: event.target.value })} />
                 </label>
-                <label>
-                  End
+                <label className="focus-field">
+                  <span>End</span>
                   <input type="time" value={draft.scheduleEnd} onChange={(event) => onChange({ ...draft, scheduleEnd: event.target.value })} />
                 </label>
-              </>
-            )}
-            {draft.conditionType === "quick-block" && (
-              <label>
-                Quick block minutes
-                <input
-                  type="number"
-                  min={5}
-                  max={720}
-                  value={draft.quickBlockMinutes}
-                  onChange={(event) => onChange({ ...draft, quickBlockMinutes: Number(event.target.value) || 60 })}
-                />
+              </div>
+            </div>
+          )}
+
+          {draft.conditionType === "quick-block" && (
+            <div className="profile-condition-details">
+              <label className="focus-field">
+                <span>Duration</span>
+                <div className="focus-input-row">
+                  <input
+                    type="number"
+                    min={5}
+                    max={720}
+                    value={draft.quickBlockMinutes}
+                    onChange={(event) => onChange({ ...draft, quickBlockMinutes: Number(event.target.value) || 60 })}
+                  />
+                  <span className="focus-unit">min</span>
+                </div>
               </label>
-            )}
-            {draft.conditionType === "usage-limit" && (
-              <>
-                <label>
-                  Limit scope
+            </div>
+          )}
+
+          {draft.conditionType === "usage-limit" && (
+            <div className="profile-condition-details">
+              <div className="focus-field-row">
+                <label className="focus-field">
+                  <span>Scope</span>
                   <select value={draft.usageLimitScope} onChange={(event) => onChange({ ...draft, usageLimitScope: event.target.value as "daily" | "hourly" })}>
                     <option value="daily">Daily</option>
                     <option value="hourly">Hourly</option>
                   </select>
                 </label>
-                <label>
-                  Limit minutes
-                  <input
-                    type="number"
-                    min={5}
-                    max={240}
-                    value={draft.usageLimitMinutes}
-                    onChange={(event) => onChange({ ...draft, usageLimitMinutes: Number(event.target.value) || 60 })}
-                  />
+                <label className="focus-field">
+                  <span>Limit</span>
+                  <div className="focus-input-row">
+                    <input
+                      type="number"
+                      min={5}
+                      max={240}
+                      value={draft.usageLimitMinutes}
+                      onChange={(event) => onChange({ ...draft, usageLimitMinutes: Number(event.target.value) || 60 })}
+                    />
+                    <span className="focus-unit">min</span>
+                  </div>
                 </label>
-              </>
-            )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="focus-form">
+          <div className="focus-field">
+            <span>App mode</span>
+            <div className="focus-mode-toggle">
+              <button
+                className={`focus-mode-btn ${draft.appPolicy === "blocklist" ? "active" : ""}`}
+                onClick={() => onChange({ ...draft, appPolicy: "blocklist" })}
+              >
+                <Shield size={14} />
+                Blocklist
+              </button>
+              <button
+                className={`focus-mode-btn ${draft.appPolicy === "allowlist" ? "active" : ""}`}
+                onClick={() => onChange({ ...draft, appPolicy: "allowlist" })}
+              >
+                <CheckCircle2 size={14} />
+                Allowlist
+              </button>
+            </div>
+            <span className="profile-mode-hint">
+              {draft.appPolicy === "blocklist"
+                ? "Only apps you add will be closed."
+                : "Only apps you add will be allowed — everything else closes."}
+            </span>
           </div>
-        )}
-        {draft.step === 5 && (
-          <div className="muted">
-            <p>Name: {draft.name || "Untitled profile"}</p>
-            <p>Mode: {draft.appPolicy}</p>
-            <p>Condition: {draft.conditionType}</p>
+        </div>
+
+        <div className="focus-apps-section">
+          <div className="focus-apps-header">
+            <span className="focus-apps-label">
+              {draft.appPolicy === "blocklist" ? "Blocked apps" : "Allowed apps"} · {draft.apps.length} added
+            </span>
+            <button className="secondary" onClick={onPickRunningApps}>
+              <AppWindow size={14} />
+              Running apps
+            </button>
           </div>
-        )}
+          <div className="entry-row">
+            <input
+              value={draft.appInput}
+              placeholder={draft.appPolicy === "blocklist" ? "e.g. discord.exe" : "e.g. code.exe"}
+              onChange={(event) => onChange({ ...draft, appInput: event.target.value })}
+              onKeyDown={(event) => { if (event.key === "Enter") addAppFromInput(); }}
+            />
+            <button className="primary" onClick={addAppFromInput}>
+              <Plus size={14} />
+              Add
+            </button>
+          </div>
+          {runningApps.length > 0 && (
+            <div className="running-app-list">
+              <div className="running-app-list-header">
+                <strong>Running apps</strong>
+                <button className="secondary icon-only" onClick={onCloseRunningApps} aria-label="Close running apps">
+                  <X size={14} />
+                </button>
+              </div>
+              {runningApps.map((runningApp) => {
+                const selected = draft.apps.some((a) => a.executable === runningApp.executable && a.path === runningApp.path);
+                return (
+                  <button
+                    className={`running-app-row ${selected ? "selected" : ""}`}
+                    key={`${runningApp.executable}-${runningApp.path ?? runningApp.displayName}`}
+                    onClick={() => toggleApp(runningApp)}
+                  >
+                    <strong>{runningApp.displayName}</strong>
+                    <span>{runningApp.executable}</span>
+                    <small>{runningApp.path || runningApp.title || ""}</small>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {draft.apps.length > 0 && (
+            <div className="profile-app-chips">
+              {draft.apps.map((app) => (
+                <span className="profile-app-chip" key={app.executable}>
+                  {app.displayName}
+                  <button className="chip-remove" onClick={() => removeApp(app)} aria-label={`Remove ${app.displayName}`}>
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {draft.apps.length === 0 && runningApps.length === 0 && (
+            <p className="focus-apps-hint">
+              {draft.appPolicy === "blocklist"
+                ? "Type an app name or pick from running apps to block."
+                : "Add apps you want to keep available during focus."}
+            </p>
+          )}
+        </div>
+
         <div className="confirm-actions">
           <button className="secondary" onClick={onCancel}>
             Cancel
           </button>
-          {draft.step > 1 && (
-            <button className="secondary" onClick={() => onChange({ ...draft, step: (draft.step - 1) as NewProfileDraft["step"] })}>
-              Back
-            </button>
-          )}
-          {draft.step < 5 ? (
-            <button className="primary" onClick={() => onChange({ ...draft, step: (draft.step + 1) as NewProfileDraft["step"] })}>
-              Next
-            </button>
-          ) : (
-            <button className="primary" onClick={onCreate}>
-              Create profile
-            </button>
-          )}
+          <button className="primary" onClick={onCreate}>
+            Create profile
+          </button>
         </div>
       </section>
     </div>
@@ -1168,19 +1421,31 @@ function RuleTable({
 function FocusSessionSetupDialog({
   draft,
   strictLocked,
+  presets,
   runningApps,
   onChange,
   onCancel,
   onStart,
-  onPickRunningApps
+  onSavePreset,
+  onApplyPreset,
+  onDeletePreset,
+  onPickCustomWallpaper,
+  onPickRunningApps,
+  onCloseRunningApps
 }: {
   draft: FocusSessionDraft;
   strictLocked: boolean;
+  presets: FocusSessionPreset[];
   runningApps: SelectedAppExecutable[];
   onChange: (draft: FocusSessionDraft) => void;
   onCancel: () => void;
   onStart: () => void;
+  onSavePreset: () => void;
+  onApplyPreset: (preset: FocusSessionPreset) => void;
+  onDeletePreset: (id: string) => void;
+  onPickCustomWallpaper: () => void;
   onPickRunningApps: () => void;
+  onCloseRunningApps: () => void;
 }) {
   function toggleAllowedApp(app: SelectedAppExecutable) {
     const exists = draft.allowedApps.some((item) => item.executable === app.executable && item.path === app.path);
@@ -1194,55 +1459,73 @@ function FocusSessionSetupDialog({
 
   return (
     <div className="confirm-backdrop" role="presentation">
-      <section className="confirm-dialog profile-dialog" role="dialog" aria-modal="true" aria-labelledby="focus-session-title">
-        <div>
-          <p className="eyebrow">Focus session</p>
-          <h2 id="focus-session-title">Create session</h2>
-        </div>
-        <div className="mode-options">
-          <button className={draft.mode === "duration" ? "mode-card active" : "mode-card"} onClick={() => onChange({ ...draft, mode: "duration" })}>
-            <strong>Duration</strong>
-          </button>
-          <button className={draft.mode === "pomodoro" ? "mode-card active" : "mode-card"} onClick={() => onChange({ ...draft, mode: "pomodoro" })}>
-            <strong>Pomodoro</strong>
+      <section className="confirm-dialog focus-dialog" role="dialog" aria-modal="true" aria-labelledby="focus-session-title">
+        <div className="focus-dialog-header">
+          <div>
+            <p className="eyebrow">Focus session</p>
+            <h2 id="focus-session-title">New session</h2>
+          </div>
+          <button className="secondary icon-only" onClick={onCancel} aria-label="Close">
+            <X size={16} />
           </button>
         </div>
-        <div className="settings-grid">
+
+        <div className="focus-mode-toggle">
+          <button className={`focus-mode-btn ${draft.mode === "duration" ? "active" : ""}`} onClick={() => onChange({ ...draft, mode: "duration" })}>
+            <Clock3 size={14} />
+            Duration
+          </button>
+          <button className={`focus-mode-btn ${draft.mode === "pomodoro" ? "active" : ""}`} onClick={() => onChange({ ...draft, mode: "pomodoro" })}>
+            <RefreshCcw size={14} />
+            Pomodoro
+          </button>
+        </div>
+
+        <div className="focus-form">
           {draft.mode === "duration" ? (
-            <label>
-              Duration (minutes)
-              <input
-                type="number"
-                min={5}
-                max={720}
-                value={draft.durationMinutes}
-                onChange={(event) => onChange({ ...draft, durationMinutes: Number(event.target.value) || 45 })}
-              />
-            </label>
-          ) : (
-            <>
-              <label>
-                Focus (minutes)
+            <label className="focus-field">
+              <span>Duration</span>
+              <div className="focus-input-row">
                 <input
                   type="number"
                   min={5}
-                  max={120}
-                  value={draft.focusMinutes}
-                  onChange={(event) => onChange({ ...draft, focusMinutes: Number(event.target.value) || 25 })}
+                  max={720}
+                  value={draft.durationMinutes}
+                  onChange={(event) => onChange({ ...draft, durationMinutes: Number(event.target.value) || 45 })}
                 />
+                <span className="focus-unit">min</span>
+              </div>
+            </label>
+          ) : (
+            <div className="focus-field-row">
+              <label className="focus-field">
+                <span>Focus</span>
+                <div className="focus-input-row">
+                  <input
+                    type="number"
+                    min={5}
+                    max={120}
+                    value={draft.focusMinutes}
+                    onChange={(event) => onChange({ ...draft, focusMinutes: Number(event.target.value) || 25 })}
+                  />
+                  <span className="focus-unit">min</span>
+                </div>
               </label>
-              <label>
-                Break (minutes)
-                <input
-                  type="number"
-                  min={1}
-                  max={30}
-                  value={draft.breakMinutes}
-                  onChange={(event) => onChange({ ...draft, breakMinutes: Number(event.target.value) || 5 })}
-                />
+              <label className="focus-field">
+                <span>Break</span>
+                <div className="focus-input-row">
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={draft.breakMinutes}
+                    onChange={(event) => onChange({ ...draft, breakMinutes: Number(event.target.value) || 5 })}
+                  />
+                  <span className="focus-unit">min</span>
+                </div>
               </label>
-              <label>
-                Rounds
+              <label className="focus-field">
+                <span>Rounds</span>
                 <input
                   type="number"
                   min={1}
@@ -1251,74 +1534,131 @@ function FocusSessionSetupDialog({
                   onChange={(event) => onChange({ ...draft, rounds: Number(event.target.value) || 4 })}
                 />
               </label>
-            </>
+            </div>
           )}
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={strictLocked ? false : draft.showPauseButton}
-              disabled={strictLocked}
-              onChange={(event) => onChange({ ...draft, showPauseButton: event.target.checked })}
-            />
-            Show pause button
-          </label>
-          <label>
-            Wallpaper
-            <select
-              value={draft.wallpaperType}
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  wallpaperType: event.target.value as "default" | "solid"
-                })
-              }
-            >
-              <option value="default">Default</option>
-              <option value="solid">Solid color</option>
-            </select>
-          </label>
-          {draft.wallpaperType === "solid" && (
-            <label>
-              Color
+
+          <div className="focus-options-row">
+            <label className="focus-check">
               <input
-                type="color"
-                value={draft.wallpaperValue}
-                onChange={(event) => onChange({ ...draft, wallpaperValue: event.target.value })}
+                type="checkbox"
+                checked={strictLocked ? false : draft.showPauseButton}
+                disabled={strictLocked}
+                onChange={(event) => onChange({ ...draft, showPauseButton: event.target.checked })}
               />
+              Allow pausing
             </label>
+            <label className="focus-field compact">
+              <span>Wallpaper</span>
+              <select
+                value={draft.wallpaperType}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    wallpaperType: event.target.value as "default" | "solid" | "custom"
+                  })
+                }
+              >
+                <option value="default">Default</option>
+                <option value="solid">Solid color</option>
+                <option value="custom">Custom image</option>
+              </select>
+            </label>
+            {draft.wallpaperType === "solid" && (
+              <label className="focus-field compact">
+                <span>Color</span>
+                <input
+                  type="color"
+                  value={draft.wallpaperValue}
+                  onChange={(event) => onChange({ ...draft, wallpaperValue: event.target.value })}
+                />
+              </label>
+            )}
+            {draft.wallpaperType === "custom" && (
+              <button className="secondary compact" onClick={onPickCustomWallpaper}>
+                <FolderOpen size={14} />
+                Choose image
+              </button>
+            )}
+          </div>
+          {draft.wallpaperType === "custom" && draft.wallpaperValue && (
+            <p className="focus-apps-hint">Selected: {draft.wallpaperValue}</p>
           )}
         </div>
-        <div>
-          <div className="topbar-actions">
+
+        <div className="focus-apps-section">
+          <div className="focus-apps-header">
+            <span className="focus-apps-label">Session presets</span>
+          </div>
+          <div className="entry-row">
+            <input
+              value={draft.presetName}
+              placeholder="Preset name"
+              onChange={(event) => onChange({ ...draft, presetName: event.target.value })}
+            />
+            <button className="secondary" onClick={onSavePreset}>
+              <Plus size={14} />
+              Save preset
+            </button>
+          </div>
+          {presets.length > 0 && (
+            <div className="rule-table">
+              {presets.map((preset) => (
+                <div className="rule-row" key={preset.id}>
+                  <div>
+                    <strong>{preset.name}</strong>
+                    <span>{preset.mode === "pomodoro" ? "Pomodoro" : "Duration"} · {preset.allowedApps.length} app(s)</span>
+                  </div>
+                  <button className="secondary" onClick={() => onApplyPreset(preset)}>
+                    Apply
+                  </button>
+                  <button className="danger icon-only" onClick={() => onDeletePreset(preset.id)} aria-label={`Delete ${preset.name}`}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="focus-apps-section">
+          <div className="focus-apps-header">
+            <span className="focus-apps-label">Allowed apps · {draft.allowedApps.length} selected</span>
             <button className="secondary" onClick={onPickRunningApps}>
-              <AppWindow size={16} />
-              Load running apps
+              <AppWindow size={14} />
+              Load running
             </button>
           </div>
           {runningApps.length > 0 && (
             <div className="running-app-list">
+              <div className="running-app-list-header">
+                <strong>Running apps</strong>
+                <button className="secondary icon-only" onClick={onCloseRunningApps} aria-label="Close running apps">
+                  <X size={14} />
+                </button>
+              </div>
               {runningApps.map((runningApp) => {
                 const selected = draft.allowedApps.some(
                   (item) => item.executable === runningApp.executable && item.path === runningApp.path
                 );
                 return (
                   <button
-                    className={selected ? "running-app-row mode-card active" : "running-app-row"}
+                    className={`running-app-row ${selected ? "selected" : ""}`}
                     key={`${runningApp.executable}-${runningApp.path ?? runningApp.displayName}`}
                     onClick={() => toggleAllowedApp(runningApp)}
                   >
                     <strong>{runningApp.displayName}</strong>
                     <span>{runningApp.executable}</span>
-                    <small>{runningApp.path || runningApp.title || "Path unavailable"}</small>
+                    <small>{runningApp.path || runningApp.title || ""}</small>
                   </button>
                 );
               })}
             </div>
           )}
+          {draft.allowedApps.length === 0 && runningApps.length === 0 && (
+            <p className="focus-apps-hint">No apps selected — only the focus screen will be usable.</p>
+          )}
         </div>
-        <p className="muted">
-          Allowed apps selected: {draft.allowedApps.length}. {draft.allowedApps.length === 0 ? "Only the focus screen will remain usable." : ""}
-        </p>
+
         <div className="confirm-actions">
           <button className="secondary" onClick={onCancel}>
             Cancel
@@ -1400,7 +1740,7 @@ function ScheduleEditor({
 }
 
 function Timeline({ events }: { events: UsageEvent[] }) {
-  if (events.length === 0) return <p className="empty">No activity recorded yet.</p>;
+  if (events.length === 0) return <p className="empty">Your activity timeline will build up here.</p>;
   return (
     <div className="timeline">
       {events.map((event) => (

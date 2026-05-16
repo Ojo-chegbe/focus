@@ -100,6 +100,22 @@ export interface FocusSessionConfig {
   strict: boolean;
 }
 
+export interface FocusSessionPreset {
+  id: string;
+  name: string;
+  profileId: string;
+  mode: "duration" | "pomodoro";
+  durationMinutes?: number;
+  focusMinutes?: number;
+  breakMinutes?: number;
+  rounds?: number;
+  allowedApps: AllowedApp[];
+  wallpaperType: "default" | "solid" | "custom";
+  wallpaperValue: string;
+  showPauseButton: boolean;
+  createdAt: string;
+}
+
 export interface ProfileCondition {
   id: string;
   profileId: string;
@@ -137,6 +153,7 @@ export interface AppState {
   blockedSites: BlockedSite[];
   schedules: Schedule[];
   profileConditions: ProfileCondition[];
+  focusSessionPresets: FocusSessionPreset[];
   focusSessions: FocusSession[];
   usageEvents: UsageEvent[];
   settings: AppSettings;

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { execFile } from "node:child_process";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { AppState, UsageSummary } from "../shared/models";
 import { channels, type SelectedAppExecutable } from "../shared/ipc";
@@ -93,6 +94,7 @@ function registerIpc(): void {
   ipcMain.handle(channels.saveProfile, async (_, profile) => saveAndApply(() => store.saveProfile(profile)));
   ipcMain.handle(channels.deleteProfile, async (_, profileId) => saveAndApply(() => store.deleteProfile(profileId)));
   ipcMain.handle(channels.selectAppExecutable, () => selectAppExecutable());
+  ipcMain.handle(channels.selectWallpaperImage, () => selectWallpaperImage());
   ipcMain.handle(channels.listRunningApps, () => listRunningApps());
   ipcMain.handle(channels.saveBlockedApp, async (_, blockedApp) => saveAndApply(() => store.saveBlockedApp(blockedApp)));
   ipcMain.handle(channels.deleteBlockedApp, async (_, id) => saveAndApply(() => store.deleteBlockedApp(id)));
@@ -105,6 +107,8 @@ function registerIpc(): void {
   ipcMain.handle(channels.startFocusSession, async (_, profileId, minutes) =>
     saveAndApply(() => store.startFocusSession(profileId, minutes))
   );
+  ipcMain.handle(channels.saveFocusSessionPreset, async (_, preset) => saveAndApply(() => store.saveFocusSessionPreset(preset)));
+  ipcMain.handle(channels.deleteFocusSessionPreset, async (_, id) => saveAndApply(() => store.deleteFocusSessionPreset(id)));
   ipcMain.handle(channels.endFocusSession, async (_, id) => saveAndApply(() => store.endFocusSession(id)));
   ipcMain.handle(channels.pauseFocusSession, async (_, id) => saveAndApply(() => store.pauseFocusSession(id)));
   ipcMain.handle(channels.resumeFocusSession, async (_, id) => saveAndApply(() => store.resumeFocusSession(id)));
@@ -148,6 +152,17 @@ async function selectAppExecutable() {
     executable,
     path: selectedPath
   };
+}
+
+async function selectWallpaperImage() {
+  const options: Electron.OpenDialogOptions = {
+    title: "Choose wallpaper image",
+    properties: ["openFile"],
+    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }]
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) return undefined;
+  return result.filePaths[0];
 }
 
 async function listRunningApps(): Promise<SelectedAppExecutable[]> {
@@ -273,7 +288,9 @@ function syncFocusModeWindow(activeRules: ReturnType<typeof getActiveRules>): vo
   const wallpaper =
     session.wallpaperType === "solid"
       ? (session.wallpaperValue || "#0f1724")
-      : "linear-gradient(135deg, #0f1724 0%, #111827 60%, #1f2937 100%)";
+      : session.wallpaperType === "custom" && session.wallpaperValue
+        ? `url('${escapeHtml(pathToFileURL(session.wallpaperValue).toString())}') center / cover no-repeat fixed`
+        : "linear-gradient(135deg, #0f1724 0%, #111827 60%, #1f2937 100%)";
   const endsAtLabel = new Date(session.endsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const isPaused = Boolean(session.paused);
   const canPause = !session.strict && session.showPauseButton !== false;
@@ -296,13 +313,13 @@ h1{font-size:48px;margin:0 0 8px} p{color:#d1d5db} .grid{margin-top:22px;display
             (app) =>
               `<div class="chip"><strong>${escapeHtml(app.displayName || app.executable)}</strong><small>${escapeHtml(
                 app.executable
-              )}</small>${app.path ? `<button onclick="location.href='focus-launch://${encodeURIComponent(app.path)}'">Open</button>` : ""}</div>`
+              )}</small>${app.path ? `<button onclick="location.href='https://focus.local/launch/${encodeURIComponent(app.path)}'">Open</button>` : ""}</div>`
           )
           .join("")
       : "<div class=\"chip\">No allowed apps configured</div>"
   }</div><div class="actions">${
-    canPause ? `<button onclick="location.href='focus-action://${isPaused ? "resume" : "pause"}/${session.id}'">${isPaused ? "Resume" : "Pause"}</button>` : ""
-  }${canEnd ? `<button onclick="location.href='focus-action://end/${session.id}'">End Session</button>` : ""}</div></main></body></html>`;
+    canPause ? `<button onclick="location.href='https://focus.local/action/${isPaused ? "resume" : "pause"}/${session.id}'">${isPaused ? "Resume" : "Pause"}</button>` : ""
+  }${canEnd ? `<button onclick="location.href='https://focus.local/action/end/${session.id}'">End Session</button>` : ""}</div></main></body></html>`;
   if (!focusModeWindow || focusModeWindow.isDestroyed()) {
     focusModeWindow = new BrowserWindow({
       fullscreen: true,
@@ -312,16 +329,16 @@ h1{font-size:48px;margin:0 0 8px} p{color:#d1d5db} .grid{margin-top:22px;display
       webPreferences: { sandbox: true }
     });
     focusModeWindow.webContents.on("will-navigate", (event, url) => {
-      if (url.startsWith("focus-launch://")) {
+      if (url.startsWith("https://focus.local/launch/")) {
         event.preventDefault();
-        const encodedPath = url.replace("focus-launch://", "");
+        const encodedPath = url.replace("https://focus.local/launch/", "");
         const appPath = decodeURIComponent(encodedPath);
         void shell.openPath(appPath);
         return;
       }
-      if (url.startsWith("focus-action://")) {
+      if (url.startsWith("https://focus.local/action/")) {
         event.preventDefault();
-        const [, action, id] = url.replace("focus-action://", "").split("/");
+        const [action, id] = url.replace("https://focus.local/action/", "").split("/");
         if (!id) return;
         if (action === "pause") {
           void saveAndApply(() => store.pauseFocusSession(id));

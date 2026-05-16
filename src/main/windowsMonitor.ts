@@ -241,16 +241,16 @@ function findAllowlistViolation(
 
 function matchesAppRule(app: AppRule, current: { executable: string; title: string; path?: string }): boolean {
   const executable = current.executable.toLowerCase();
-  const title = current.title.toLowerCase();
   const currentPath = current.path?.toLowerCase();
   const ruleExecutable = app.executable.toLowerCase();
   const rulePath = app.path?.toLowerCase();
   const displayName = app.displayName.toLowerCase().replace(/\.exe$/i, "").trim();
+  const executableStem = executable.replace(/\.exe$/i, "");
 
   return (
     executable === ruleExecutable ||
     Boolean(rulePath && currentPath === rulePath) ||
-    Boolean(displayName && (executable.replace(/\.exe$/i, "") === displayName || title.includes(displayName)))
+    Boolean(displayName && executableStem === displayName)
   );
 }
 
