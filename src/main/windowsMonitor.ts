@@ -89,24 +89,29 @@ export class WindowsMonitor {
     const rules = this.getRules();
     const hasSessionAllowlist = rules.focusSessionAllowedApps.length > 0;
     const hasAllowlistMode = Object.values(rules.appPoliciesByProfileId).includes("allowlist");
-    const blocked = hasSessionAllowlist
+    const blockedAppOrSite = hasSessionAllowlist
       ? findSessionAllowlistViolation(rules, current)
       : hasAllowlistMode
         ? findAllowlistViolation(rules, current)
         : rules.blockedApps.find((app) => matchesAppRule(app, current));
 
+    const blocked = blockedAppOrSite || findSiteViolation(rules, current);
+
     if (blocked) {
+      const isSite = "isSite" in blocked && blocked.isSite;
       this.store.addUsageEvent({
-        type: "app-blocked",
+        type: isSite ? "site-blocked" : "app-blocked",
         target: blocked.displayName,
         profileId: blocked.profileId,
-        detail: hasAllowlistMode
+        detail: hasAllowlistMode && !isSite
           ? `${current.title || current.executable} is not in the active allowlist.`
-          : hasSessionAllowlist
+          : hasSessionAllowlist && !isSite
           ? `${current.title || current.executable} is not in the active allowlist.`
           : current.title || current.executable
       });
-      await this.closeBlockedProcess(current.processId, current.executable, blocked.displayName);
+      if (!isSite) {
+        await this.closeBlockedProcess(current.processId, current.executable, blocked.displayName);
+      }
       this.showBlockedWindow(blocked.displayName);
     } else {
       this.hideBlockedWindow();
@@ -305,4 +310,48 @@ function escapeHtml(value: string): string {
     };
     return entities[char] ?? char;
   });
+}
+
+function findSiteViolation(
+  rules: ActiveRules,
+  current: { executable: string; title: string; path?: string }
+): (BlockedApp & { isSite: boolean }) | undefined {
+  const executable = current.executable.toLowerCase();
+  const isBrowser = [
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+    "safari.exe",
+    "iexplore.exe",
+    "waterfox.exe",
+    "librewolf.exe",
+    "vivaldi.exe",
+    "thorium.exe"
+  ].includes(executable);
+  
+  if (!isBrowser) return undefined;
+
+  const titleLower = current.title.toLowerCase();
+  const site = rules.sites.find((s) => {
+    const domainParts = s.normalizedHost.split(".");
+    if (domainParts.length >= 2) {
+      const name = domainParts[domainParts.length - 2];
+      if (name.length > 3 && titleLower.includes(name)) return true;
+    }
+    return titleLower.includes(s.normalizedHost);
+  });
+
+  if (site) {
+    return {
+      id: site.id,
+      profileId: site.profileId,
+      displayName: site.domain,
+      executable: current.executable,
+      enabled: true,
+      isSite: true
+    };
+  }
+  return undefined;
 }

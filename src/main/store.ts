@@ -106,6 +106,7 @@ export class FocusStore {
 
   getState(): AppState {
     this.expireFocusSessions();
+    this.expireDisabledRules();
     return structuredClone(this.state);
   }
 
@@ -170,6 +171,12 @@ export class FocusStore {
 
   saveBlockedApp(blockedApp: BlockedApp): AppState {
     if (this.isProfileLocked(blockedApp.profileId)) return this.getState();
+    const existing = this.state.blockedApps.find((a) => a.id === blockedApp.id);
+    if (existing && existing.enabled && !blockedApp.enabled) {
+      blockedApp.disabledUntil = new Date(Date.now() + 5 * 60000).toISOString();
+    } else if (blockedApp.enabled) {
+      blockedApp.disabledUntil = undefined;
+    }
     this.upsert("blockedApps", {
       ...blockedApp,
       displayName: blockedApp.displayName.trim() || blockedApp.executable.trim(),
@@ -200,6 +207,12 @@ export class FocusStore {
 
   saveBlockedSite(blockedSite: BlockedSite): AppState {
     if (this.isProfileLocked(blockedSite.profileId)) return this.getState();
+    const existing = this.state.blockedSites.find((a) => a.id === blockedSite.id);
+    if (existing && existing.enabled && !blockedSite.enabled) {
+      blockedSite.disabledUntil = new Date(Date.now() + 5 * 60000).toISOString();
+    } else if (blockedSite.enabled) {
+      blockedSite.disabledUntil = undefined;
+    }
     const normalizedHost = normalizeDomain(blockedSite.domain || blockedSite.normalizedHost);
     this.upsert("blockedSites", {
       ...blockedSite,
@@ -449,6 +462,26 @@ export class FocusStore {
       if (session.active && new Date(session.endsAt).getTime() <= now) {
         if (session.paused) continue;
         session.active = false;
+        changed = true;
+      }
+    }
+    if (changed) this.persist();
+  }
+
+  private expireDisabledRules(): void {
+    const now = Date.now();
+    let changed = false;
+    for (const app of this.state.blockedApps) {
+      if (!app.enabled && app.disabledUntil && new Date(app.disabledUntil).getTime() <= now) {
+        app.enabled = true;
+        app.disabledUntil = undefined;
+        changed = true;
+      }
+    }
+    for (const site of this.state.blockedSites) {
+      if (!site.enabled && site.disabledUntil && new Date(site.disabledUntil).getTime() <= now) {
+        site.enabled = true;
+        site.disabledUntil = undefined;
         changed = true;
       }
     }
