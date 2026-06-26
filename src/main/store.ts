@@ -18,6 +18,8 @@ import type {
 import { createId, isStrictLocked, normalizeDomain } from "../shared/rules";
 
 const nowIso = () => new Date().toISOString();
+const FIVE_MINUTES_MS = 5 * 60_000;
+const ONE_HOUR_MS = 60 * 60_000;
 
 function clampInteger(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isInteger(value)) return fallback;
@@ -173,9 +175,12 @@ export class FocusStore {
     if (this.isProfileLocked(blockedApp.profileId)) return this.getState();
     const existing = this.state.blockedApps.find((a) => a.id === blockedApp.id);
     if (existing && existing.enabled && !blockedApp.enabled) {
-      blockedApp.disabledUntil = new Date(Date.now() + 5 * 60000).toISOString();
+      if (existing.cooldownUntil && new Date(existing.cooldownUntil).getTime() > Date.now()) return this.getState();
+      blockedApp.disabledUntil = new Date(Date.now() + FIVE_MINUTES_MS).toISOString();
+      blockedApp.cooldownUntil = undefined;
     } else if (blockedApp.enabled) {
       blockedApp.disabledUntil = undefined;
+      blockedApp.cooldownUntil = existing?.cooldownUntil;
     }
     this.upsert("blockedApps", {
       ...blockedApp,
@@ -192,6 +197,15 @@ export class FocusStore {
 
   saveAllowedApp(allowedApp: AllowedApp): AppState {
     if (this.isProfileLocked(allowedApp.profileId)) return this.getState();
+    const existing = this.state.allowedApps.find((a) => a.id === allowedApp.id);
+    if (existing && existing.enabled && !allowedApp.enabled) {
+      if (existing.cooldownUntil && new Date(existing.cooldownUntil).getTime() > Date.now()) return this.getState();
+      allowedApp.disabledUntil = new Date(Date.now() + FIVE_MINUTES_MS).toISOString();
+      allowedApp.cooldownUntil = undefined;
+    } else if (allowedApp.enabled) {
+      allowedApp.disabledUntil = undefined;
+      allowedApp.cooldownUntil = existing?.cooldownUntil;
+    }
     this.upsert("allowedApps", {
       ...allowedApp,
       displayName: allowedApp.displayName.trim() || allowedApp.executable.trim(),
@@ -209,9 +223,12 @@ export class FocusStore {
     if (this.isProfileLocked(blockedSite.profileId)) return this.getState();
     const existing = this.state.blockedSites.find((a) => a.id === blockedSite.id);
     if (existing && existing.enabled && !blockedSite.enabled) {
-      blockedSite.disabledUntil = new Date(Date.now() + 5 * 60000).toISOString();
+      if (existing.cooldownUntil && new Date(existing.cooldownUntil).getTime() > Date.now()) return this.getState();
+      blockedSite.disabledUntil = new Date(Date.now() + FIVE_MINUTES_MS).toISOString();
+      blockedSite.cooldownUntil = undefined;
     } else if (blockedSite.enabled) {
       blockedSite.disabledUntil = undefined;
+      blockedSite.cooldownUntil = existing?.cooldownUntil;
     }
     const normalizedHost = normalizeDomain(blockedSite.domain || blockedSite.normalizedHost);
     this.upsert("blockedSites", {
@@ -475,6 +492,21 @@ export class FocusStore {
       if (!app.enabled && app.disabledUntil && new Date(app.disabledUntil).getTime() <= now) {
         app.enabled = true;
         app.disabledUntil = undefined;
+        app.cooldownUntil = new Date(now + ONE_HOUR_MS).toISOString();
+        changed = true;
+      } else if (app.enabled && app.cooldownUntil && new Date(app.cooldownUntil).getTime() <= now) {
+        app.cooldownUntil = undefined;
+        changed = true;
+      }
+    }
+    for (const app of this.state.allowedApps) {
+      if (!app.enabled && app.disabledUntil && new Date(app.disabledUntil).getTime() <= now) {
+        app.enabled = true;
+        app.disabledUntil = undefined;
+        app.cooldownUntil = new Date(now + ONE_HOUR_MS).toISOString();
+        changed = true;
+      } else if (app.enabled && app.cooldownUntil && new Date(app.cooldownUntil).getTime() <= now) {
+        app.cooldownUntil = undefined;
         changed = true;
       }
     }
@@ -482,6 +514,10 @@ export class FocusStore {
       if (!site.enabled && site.disabledUntil && new Date(site.disabledUntil).getTime() <= now) {
         site.enabled = true;
         site.disabledUntil = undefined;
+        site.cooldownUntil = new Date(now + ONE_HOUR_MS).toISOString();
+        changed = true;
+      } else if (site.enabled && site.cooldownUntil && new Date(site.cooldownUntil).getTime() <= now) {
+        site.cooldownUntil = undefined;
         changed = true;
       }
     }

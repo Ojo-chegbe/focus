@@ -21,11 +21,18 @@ $foregroundProcessId = 0
 if ($foregroundProcessId -gt 0) {
   $p = Get-Process -Id $foregroundProcessId -ErrorAction SilentlyContinue
   if ($p) {
+    $processPath = ""
+    try { $processPath = $p.Path } catch {}
+    if (-not $processPath) {
+      try { $processPath = $p.MainModule.FileName } catch {}
+    }
+    $titleText = ""
+    try { $titleText = $p.MainWindowTitle } catch {}
     [PSCustomObject]@{
       processId = $foregroundProcessId
       executable = "$($p.ProcessName).exe"
-      title = "$($p.MainWindowTitle)"
-      path = "$($p.Path)"
+      title = $titleText
+      path = $processPath
     } | ConvertTo-Json -Compress
   }
 }
@@ -111,8 +118,14 @@ export class WindowsMonitor {
       });
       if (!isSite) {
         await this.closeBlockedProcess(current.processId, current.executable, blocked.displayName);
+        this.showBlockedWindow(blocked.displayName);
+      } else {
+        this.showBlockedWindow(blocked.displayName);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        this.hideBlockedWindow();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this.closeBrowserTab();
       }
-      this.showBlockedWindow(blocked.displayName);
     } else {
       this.hideBlockedWindow();
     }
@@ -133,6 +146,18 @@ export class WindowsMonitor {
         target: displayName,
         detail: `Could not close ${executable}: ${error instanceof Error ? error.message : String(error)}`
       });
+    }
+  }
+
+  private async closeBrowserTab(): Promise<void> {
+    const script = `
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait("^{w}")
+`;
+    try {
+      await execFileAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true, timeout: 3000 });
+    } catch (error) {
+      // Ignore errors sending keys
     }
   }
 
@@ -244,18 +269,23 @@ function findAllowlistViolation(
   };
 }
 
-function matchesAppRule(app: AppRule, current: { executable: string; title: string; path?: string }): boolean {
+export function matchesAppRule(app: AppRule, current: { executable: string; title: string; path?: string }): boolean {
   const executable = current.executable.toLowerCase();
   const currentPath = current.path?.toLowerCase();
   const ruleExecutable = app.executable.toLowerCase();
   const rulePath = app.path?.toLowerCase();
   const displayName = app.displayName.toLowerCase().replace(/\.exe$/i, "").trim();
   const executableStem = executable.replace(/\.exe$/i, "");
+  const ruleExecutableStem = ruleExecutable.replace(/\.exe$/i, "");
+
+  const matchesExecutableVariant = (ruleStem: string): boolean =>
+    Boolean(ruleStem && (executableStem === ruleStem || executableStem.startsWith(`${ruleStem}.`)));
 
   return (
     executable === ruleExecutable ||
     Boolean(rulePath && currentPath === rulePath) ||
-    Boolean(displayName && executableStem === displayName)
+    matchesExecutableVariant(ruleExecutableStem) ||
+    matchesExecutableVariant(displayName)
   );
 }
 
@@ -335,6 +365,9 @@ function findSiteViolation(
 
   const titleLower = current.title.toLowerCase();
   const site = rules.sites.find((s) => {
+    if (s.normalizedHost === "x.com" || s.normalizedHost === "twitter.com") {
+      if (titleLower.includes(" / x") || titleLower.includes(" on x") || titleLower.includes("twitter")) return true;
+    }
     const domainParts = s.normalizedHost.split(".");
     if (domainParts.length >= 2) {
       const name = domainParts[domainParts.length - 2];

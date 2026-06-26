@@ -33,6 +33,7 @@ export interface BlockedApp {
   path?: string;
   enabled: boolean;
   disabledUntil?: string;
+  cooldownUntil?: string;
   dailyLimitMinutes?: number;
   launchLimit?: number;
 }
@@ -44,6 +45,8 @@ export interface AllowedApp {
   executable: string;
   path?: string;
   enabled: boolean;
+  disabledUntil?: string;
+  cooldownUntil?: string;
 }
 
 export interface BlockedSite {
@@ -54,6 +57,7 @@ export interface BlockedSite {
   includeSubdomains: boolean;
   enabled: boolean;
   disabledUntil?: string;
+  cooldownUntil?: string;
   dailyLimitMinutes?: number;
 }
 

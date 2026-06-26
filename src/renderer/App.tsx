@@ -741,6 +741,8 @@ function App() {
                 main: site.normalizedHost,
                 meta: site.includeSubdomains ? "Includes www subdomain" : "Exact host only",
                 enabled: site.enabled,
+                disabledUntil: site.disabledUntil,
+                cooldownUntil: site.cooldownUntil,
                 onToggle: () =>
                   void window.focusApi.saveBlockedSite({ ...site, enabled: !site.enabled }).then(async (nextState) => {
                     setState(nextState);
@@ -758,6 +760,14 @@ function App() {
                   })
               }))}
               locked={locked}
+              onLockedToggle={({ main, cooldownUntil }) => {
+                if (!cooldownUntil) return;
+                const remainingMs = Math.max(0, new Date(cooldownUntil).getTime() - Date.now());
+                const minutes = Math.floor(remainingMs / 60000);
+                const seconds = Math.floor((remainingMs % 60000) / 1000);
+                setToast(`${main} can be turned off again in ${minutes}:${seconds.toString().padStart(2, "0")}`);
+                setTimeout(() => setToast(undefined), 2500);
+              }}
             />
           </Panel>
 
@@ -822,6 +832,8 @@ function App() {
                 main: appRule.displayName,
                 meta: appRule.executable,
                 enabled: appRule.enabled,
+                disabledUntil: appRule.disabledUntil,
+                cooldownUntil: appRule.cooldownUntil,
                 onToggle: () =>
                   void (selectedProfile.appPolicy === "allowlist"
                     ? window.focusApi.saveAllowedApp({ ...appRule, enabled: !appRule.enabled })
@@ -848,6 +860,14 @@ function App() {
                   })
               }))}
               locked={locked}
+              onLockedToggle={({ main, cooldownUntil }) => {
+                if (!cooldownUntil) return;
+                const remainingMs = Math.max(0, new Date(cooldownUntil).getTime() - Date.now());
+                const minutes = Math.floor(remainingMs / 60000);
+                const seconds = Math.floor((remainingMs % 60000) / 1000);
+                setToast(`${main} can be turned off again in ${minutes}:${seconds.toString().padStart(2, "0")}`);
+                setTimeout(() => setToast(undefined), 2500);
+              }}
             />
           </Panel>
 
@@ -1388,30 +1408,88 @@ function CreateProfileWizard({
   );
 }
 
+function Countdown({ until }: { until: string }) {
+  const [timeLeft, setTimeLeft] = useState(() => Math.max(0, new Date(until).getTime() - Date.now()));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimeLeft(Math.max(0, new Date(until).getTime() - Date.now()));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [until]);
+
+  if (timeLeft <= 0) return null;
+  const minutes = Math.floor(timeLeft / 60000);
+  const seconds = Math.floor((timeLeft % 60000) / 1000);
+  return <>{minutes}:{seconds.toString().padStart(2, "0")}</>;
+}
+
 function RuleTable({
   rows,
   empty,
-  locked
+  locked,
+  onLockedToggle
 }: {
-  rows: Array<{ id: string; main: string; meta: string; enabled: boolean; onToggle: () => void; onDelete: () => void }>;
+  rows: Array<{
+    id: string;
+    main: string;
+    meta: string;
+    enabled: boolean;
+    disabledUntil?: string;
+    cooldownUntil?: string;
+    onToggle: () => void;
+    onDelete: () => void;
+  }>;
   empty: string;
   locked: boolean;
+  onLockedToggle?: (row: { main: string; cooldownUntil?: string }) => void;
 }) {
   if (rows.length === 0) return <p className="empty">{empty}</p>;
   return (
     <div className="rule-table">
       {rows.map((row) => (
         <div className="rule-row" key={row.id}>
+          {(() => {
+            const cooldownLocked =
+              row.enabled && typeof row.cooldownUntil === "string" && new Date(row.cooldownUntil).getTime() > Date.now();
+            return (
+              <>
           <div>
             <strong>{row.main}</strong>
             <span>{row.meta}</span>
           </div>
-          <button className={row.enabled ? "toggle on" : "toggle"} disabled={locked} onClick={row.onToggle}>
-            {row.enabled ? "On" : "Off"}
-          </button>
+          <div className="rule-toggles">
+            {!row.enabled && row.disabledUntil && (
+              <span className="countdown-text">
+                <Countdown until={row.disabledUntil} />
+              </span>
+            )}
+            {row.enabled &&
+              cooldownLocked && (
+                <span className="countdown-text lock">
+                  Lock <Countdown until={row.cooldownUntil!} />
+                </span>
+              )}
+            <button
+              className={row.enabled ? "toggle on" : "toggle"}
+              disabled={locked}
+              onClick={() => {
+                if (cooldownLocked) {
+                  onLockedToggle?.({ main: row.main, cooldownUntil: row.cooldownUntil });
+                  return;
+                }
+                row.onToggle();
+              }}
+            >
+              {row.enabled ? "On" : "Off"}
+            </button>
+          </div>
           <button className="danger icon-only" disabled={locked} onClick={row.onDelete} aria-label="Delete rule">
             <Trash2 size={16} />
           </button>
+              </>
+            );
+          })()}
         </div>
       ))}
     </div>
