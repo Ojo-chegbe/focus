@@ -25,6 +25,7 @@ const api: AppApi = {
   saveProfileCondition: (condition) => ipcRenderer.invoke(channels.saveProfileCondition, condition),
   deleteProfileCondition: (id) => ipcRenderer.invoke(channels.deleteProfileCondition, id),
   lockProfile: (profileId, minutes) => ipcRenderer.invoke(channels.lockProfile, profileId, minutes),
+  takeBreak: (profileId) => ipcRenderer.invoke(channels.takeBreak, profileId),
   applyRules: () => ipcRenderer.invoke(channels.applyRules),
   getHelperStatus: () => ipcRenderer.invoke(channels.getHelperStatus),
   getUsageSummary: () => ipcRenderer.invoke(channels.getUsageSummary),

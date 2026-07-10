@@ -44,6 +44,7 @@ export function getActiveRules(state: AppState, now = new Date()): ActiveRules {
 
   const activeProfiles = state.profiles.filter((profile) => {
     if (!profile.enabled) return false;
+    if (profile.breakUntil && new Date(profile.breakUntil).getTime() > nowMs) return false;
     const profileSchedules = state.schedules.filter((schedule) => schedule.profileId === profile.id && schedule.enabled);
     const hasActiveSchedule = profileSchedules.some((schedule) => isScheduleActive(schedule, now));
     const profileSessions = state.focusSessions.filter((session) => session.profileId === profile.id && session.active);
@@ -89,7 +90,46 @@ export function getActiveRules(state: AppState, now = new Date()): ActiveRules {
   const appPoliciesByProfileId = Object.fromEntries(
     activeProfiles.map((profile) => [profile.id, profile.appPolicy ?? "blocklist"])
   );
-  const blockedApps = state.blockedApps.filter((app) => app.enabled && activeProfileSet.has(app.profileId));
+  const startOfDayMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfHourMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours()).getTime();
+
+  const usageByTargetDaily: Record<string, number> = {};
+  const usageByTargetHourly: Record<string, number> = {};
+  
+  for (const event of state.usageEvents) {
+    const eventTime = new Date(event.startedAt).getTime();
+    if (event.durationSeconds && event.target) {
+      if (eventTime >= startOfDayMs) {
+        usageByTargetDaily[event.target] = (usageByTargetDaily[event.target] || 0) + event.durationSeconds;
+      }
+      if (eventTime >= startOfHourMs) {
+        usageByTargetHourly[event.target] = (usageByTargetHourly[event.target] || 0) + event.durationSeconds;
+      }
+    }
+  }
+
+  const blockedApps = state.blockedApps.filter((app) => {
+    if (!app.enabled || !activeProfileSet.has(app.profileId)) return false;
+    if (app.limitMinutes) {
+      const scope = app.limitScope || "daily";
+      const usageMap = scope === "hourly" ? usageByTargetHourly : usageByTargetDaily;
+      const usageSeconds = usageMap[app.displayName] || usageMap[app.executable] || 0;
+      if (usageSeconds < app.limitMinutes * 60) return false;
+    }
+    return true;
+  });
+
+  const blockedSites = state.blockedSites.filter((site) => {
+    if (!site.enabled || !activeProfileSet.has(site.profileId)) return false;
+    if (site.limitMinutes) {
+      const scope = site.limitScope || "daily";
+      const usageMap = scope === "hourly" ? usageByTargetHourly : usageByTargetDaily;
+      const usageSeconds = usageMap[site.domain] || usageMap[site.normalizedHost] || 0;
+      if (usageSeconds < site.limitMinutes * 60) return false;
+    }
+    return true;
+  });
+
   const activeFocusSession =
     state.focusSessions
       .filter((session) => session.active && new Date(session.endsAt).getTime() > nowMs)
@@ -108,7 +148,7 @@ export function getActiveRules(state: AppState, now = new Date()): ActiveRules {
     focusSessionAllowedApps,
     activeFocusSession,
     apps: blockedApps,
-    sites: state.blockedSites.filter((site) => site.enabled && activeProfileSet.has(site.profileId))
+    sites: blockedSites
   };
 }
 

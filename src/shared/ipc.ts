@@ -39,6 +39,7 @@ export interface AppApi {
   saveProfileCondition(condition: ProfileCondition): Promise<AppState>;
   deleteProfileCondition(id: string): Promise<AppState>;
   lockProfile(profileId: string, minutes: number): Promise<AppState>;
+  takeBreak(profileId: string): Promise<AppState>;
   applyRules(): Promise<HelperStatus>;
   getHelperStatus(): Promise<HelperStatus>;
   getUsageSummary(): Promise<UsageSummary>;
@@ -82,6 +83,7 @@ export const channels = {
   saveProfileCondition: "profile-condition:save",
   deleteProfileCondition: "profile-condition:delete",
   lockProfile: "profile:lock",
+  takeBreak: "profile:take-break",
   applyRules: "rules:apply",
   getHelperStatus: "helper:status",
   getUsageSummary: "usage:summary",

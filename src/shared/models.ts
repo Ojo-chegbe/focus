@@ -5,6 +5,7 @@ export type AppPolicy = "blocklist" | "allowlist";
 
 export type UsageEventType =
   | "app-session"
+  | "site-session"
   | "site-blocked"
   | "app-blocked"
   | "rules-applied"
@@ -22,6 +23,8 @@ export interface Profile {
   appPolicy: AppPolicy;
   strictUntil?: string;
   strictMode: "off" | "timer" | "challenge";
+  breakUntil?: string;
+  lastBreakAt?: string;
   createdAt: string;
 }
 
@@ -34,7 +37,8 @@ export interface BlockedApp {
   enabled: boolean;
   disabledUntil?: string;
   cooldownUntil?: string;
-  dailyLimitMinutes?: number;
+  limitMinutes?: number;
+  limitScope?: "daily" | "hourly";
   launchLimit?: number;
 }
 
@@ -47,6 +51,8 @@ export interface AllowedApp {
   enabled: boolean;
   disabledUntil?: string;
   cooldownUntil?: string;
+  limitMinutes?: number;
+  limitScope?: "daily" | "hourly";
 }
 
 export interface BlockedSite {
@@ -58,7 +64,8 @@ export interface BlockedSite {
   enabled: boolean;
   disabledUntil?: string;
   cooldownUntil?: string;
-  dailyLimitMinutes?: number;
+  limitMinutes?: number;
+  limitScope?: "daily" | "hourly";
 }
 
 export interface Schedule {
@@ -193,4 +200,5 @@ export interface UsageSummary {
   blockedAttemptsToday: number;
   activeProfiles: string[];
   topApps: Array<{ name: string; seconds: number }>;
+  weeklyFocusStats: number[];
 }

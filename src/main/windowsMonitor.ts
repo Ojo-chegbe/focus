@@ -40,7 +40,8 @@ if ($foregroundProcessId -gt 0) {
 
 export class WindowsMonitor {
   private timer?: NodeJS.Timeout;
-  private lastExecutable?: string;
+  private lastUsageTarget?: string;
+  private lastTargetIsSite = false;
   private lastStartedAt = Date.now();
   private blockedWindow?: BrowserWindow;
   private readonly lastKillByExecutable = new Map<string, number>();
@@ -78,22 +79,28 @@ export class WindowsMonitor {
     }
     this.lastDetectionError = undefined;
     const executable = current.executable.toLowerCase();
+    
+    const rules = this.getRules();
+    const state = this.store.getState();
+    const currentSite = findSiteViolation({ sites: state.blockedSites } as any, current);
+    const usageTarget = currentSite ? currentSite.displayName : executable;
+    const isSite = Boolean(currentSite);
 
-    if (this.lastExecutable && this.lastExecutable !== executable) {
+    if (this.lastUsageTarget && this.lastUsageTarget !== usageTarget) {
       const durationSeconds = Math.round((Date.now() - this.lastStartedAt) / 1000);
       if (durationSeconds > 2) {
         this.store.addUsageEvent({
-          type: "app-session",
-          target: this.lastExecutable,
+          type: this.lastTargetIsSite ? "site-session" : "app-session",
+          target: this.lastUsageTarget,
           durationSeconds,
           endedAt: new Date().toISOString()
         });
       }
       this.lastStartedAt = Date.now();
     }
-    this.lastExecutable = executable;
+    this.lastUsageTarget = usageTarget;
+    this.lastTargetIsSite = isSite;
 
-    const rules = this.getRules();
     const hasSessionAllowlist = rules.focusSessionAllowedApps.length > 0;
     const hasAllowlistMode = Object.values(rules.appPoliciesByProfileId).includes("allowlist");
     const blockedAppOrSite = hasSessionAllowlist

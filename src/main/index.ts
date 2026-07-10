@@ -115,6 +115,7 @@ function registerIpc(): void {
   ipcMain.handle(channels.saveProfileCondition, async (_, condition) => saveAndApply(() => store.saveProfileCondition(condition)));
   ipcMain.handle(channels.deleteProfileCondition, async (_, id) => saveAndApply(() => store.deleteProfileCondition(id)));
   ipcMain.handle(channels.lockProfile, async (_, profileId, minutes) => saveAndApply(() => store.lockProfile(profileId, minutes)));
+  ipcMain.handle(channels.takeBreak, async (_, profileId) => saveAndApply(() => store.takeBreak(profileId)));
   ipcMain.handle(channels.applyRules, () => applyRulesAndRecord());
   ipcMain.handle(channels.getHelperStatus, () => hostsBlocker.getStatus(getActiveRules(store.getState())));
   ipcMain.handle(channels.getUsageSummary, () => getUsageSummary(store.getState()));
@@ -408,25 +409,43 @@ async function configureLaunchAtLogin(openAtLogin: boolean): Promise<void> {
 }
 
 function getUsageSummary(state: AppState): UsageSummary {
-  const startOfToday = new Date();
+  const now = new Date();
+  const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
+
+  // Compute stats for last 7 days
+  const weeklyFocusStats = Array(7).fill(0);
+  const msPerDay = 24 * 60 * 60 * 1000;
+  
+  for (const event of state.usageEvents) {
+    if (event.type === "app-session" || event.type === "site-session") {
+      const eventDate = new Date(event.startedAt);
+      const daysAgo = Math.floor((startOfToday.getTime() - new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate()).getTime()) / msPerDay);
+      
+      if (daysAgo >= 0 && daysAgo < 7) {
+        weeklyFocusStats[6 - daysAgo] += event.durationSeconds ?? 0;
+      }
+    }
+  }
+
   const todayEvents = state.usageEvents.filter((event) => new Date(event.startedAt) >= startOfToday);
   const appTotals = new Map<string, number>();
 
   for (const event of todayEvents) {
-    if (event.type === "app-session") {
+    if (event.type === "app-session" || event.type === "site-session") {
       appTotals.set(event.target, (appTotals.get(event.target) ?? 0) + (event.durationSeconds ?? 0));
     }
   }
 
   return {
-    totalSecondsToday: [...appTotals.values()].reduce((sum, seconds) => sum + seconds, 0),
+    totalSecondsToday: weeklyFocusStats[6],
     blockedAttemptsToday: todayEvents.filter((event) => event.type.endsWith("blocked")).length,
     activeProfiles: getActiveRules(state).activeProfileNames,
     topApps: [...appTotals.entries()]
       .map(([name, seconds]) => ({ name, seconds }))
       .sort((a, b) => b.seconds - a.seconds)
-      .slice(0, 6)
+      .slice(0, 6),
+    weeklyFocusStats
   };
 }
 

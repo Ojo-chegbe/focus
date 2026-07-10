@@ -377,6 +377,28 @@ export class FocusStore {
     return this.getState();
   }
 
+  takeBreak(profileId: string): AppState {
+    const profile = this.state.profiles.find((item) => item.id === profileId);
+    if (!profile) return this.getState();
+    
+    // Check for 1 hour cooldown limit
+    const nowMs = Date.now();
+    if (profile.lastBreakAt) {
+      const lastBreakMs = new Date(profile.lastBreakAt).getTime();
+      if (nowMs - lastBreakMs < 60 * 60_000) {
+        return this.getState(); // Cooldown active, break denied
+      }
+    }
+
+    profile.breakUntil = new Date(nowMs + 5 * 60_000).toISOString();
+    profile.lastBreakAt = new Date(nowMs).toISOString();
+    
+    // Also record usage event
+    this.addEvent({ type: "strict-denied", target: "Break started", profileId, detail: "5 minute break" });
+    this.persist();
+    return this.getState();
+  }
+
   addUsageEvent(event: Omit<UsageEvent, "id" | "startedAt"> & { startedAt?: string }): AppState {
     this.addEvent(event);
     this.persist();

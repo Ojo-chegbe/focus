@@ -49,6 +49,15 @@ const weekdays: Array<{ value: Weekday; label: string }> = [
   { value: 0, label: "Sun" }
 ];
 
+const STRICT_PRESETS = [
+  { label: "15m", value: 15 },
+  { label: "1h", value: 60 },
+  { label: "2h", value: 120 },
+  { label: "4h", value: 240 },
+  { label: "8h", value: 480 },
+  { label: "24h", value: 1440 }
+];
+
 type Confirmation = {
   title: string;
   message: string;
@@ -106,6 +115,7 @@ function App() {
   const [showRunningApps, setShowRunningApps] = useState(false);
   const [newProfileDraft, setNewProfileDraft] = useState<NewProfileDraft>();
   const [toast, setToast] = useState<string>();
+  const [limitPrompt, setLimitPrompt] = useState<{ targetName: string; defaultMinutes?: number; defaultScope?: "daily" | "hourly"; onSave: (minutes?: number, scope?: "daily" | "hourly") => void }>();
   const [strictLockMinutes, setStrictLockMinutes] = useState(60);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showFocusSetup, setShowFocusSetup] = useState(false);
@@ -497,6 +507,9 @@ function App() {
   }
 
   const locked = isStrictLocked(selectedProfile.strictUntil);
+  const nowMs = Date.now();
+  const breakActive = Boolean(selectedProfile.breakUntil && new Date(selectedProfile.breakUntil).getTime() > nowMs);
+  const cooldownActive = Boolean(selectedProfile.lastBreakAt && nowMs - new Date(selectedProfile.lastBreakAt).getTime() < 60 * 60_000);
   const profileApps =
     selectedProfile.appPolicy === "allowlist"
       ? state.allowedApps.filter((app) => app.profileId === selectedProfile.id)
@@ -615,6 +628,30 @@ function App() {
             </section>
 
             <section className="content-grid">
+          <Panel title="Focus Analytics" icon={<BarChart3 size={18} />} className="span-2">
+            <div className="focus-heatmap">
+              {summary.weeklyFocusStats?.map((seconds, index) => {
+                const maxSeconds = Math.max(...(summary.weeklyFocusStats || []), 3600); // at least 1 hour scale
+                const heightPercent = Math.max(5, Math.round((seconds / maxSeconds) * 100));
+                
+                // Get day label
+                const date = new Date();
+                date.setDate(date.getDate() - (6 - index));
+                const dayLabel = index === 6 ? "Today" : date.toLocaleDateString(undefined, { weekday: "short" });
+
+                return (
+                  <div className="focus-heatmap-col" key={index} title={formatSeconds(seconds)}>
+                    <div className="focus-heatmap-bar" style={{ height: `${heightPercent}%` }} />
+                    <span className="focus-heatmap-label">{dayLabel}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {(!summary.weeklyFocusStats || summary.weeklyFocusStats.every(s => s === 0)) && (
+               <p className="empty" style={{ textAlign: "center", marginTop: "10px" }}>No focus data yet for this week.</p>
+            )}
+          </Panel>
+
           <Panel title="Profiles" icon={<Shield size={18} />} className="span-2">
             <div className="topbar-actions">
               <button className="primary" onClick={openProfileCreator}>
@@ -676,28 +713,83 @@ function App() {
           </Panel>
 
           <Panel title="Strict Mode" icon={<Lock size={18} />}>
-            <div className="strict-row">
-              <div>
-                <strong>{locked ? "Locked" : "Unlocked"}</strong>
-                <p className="muted">
-                  {locked ? `Changes resume ${new Date(selectedProfile.strictUntil ?? "").toLocaleString()}` : "Lock edits during a focus block."}
-                </p>
+            <div className="strict-container">
+              <div className="strict-header">
+                <div>
+                  <strong>{locked ? "Locked" : "Unlocked"}</strong>
+                  <p className="muted">
+                    {locked ? `Changes resume ${new Date(selectedProfile.strictUntil ?? "").toLocaleString()}` : "Lock edits during a focus block. Choose a duration to prevent changes to this profile."}
+                  </p>
+                </div>
               </div>
-              <div className="strict-actions">
-                <label className="strict-minutes">
-                  <span>Minutes</span>
-                  <input
-                    type="number"
-                    min={5}
-                    max={1440}
-                    value={strictLockMinutes}
-                    disabled={locked}
-                    onChange={(event) => setStrictLockMinutes(Math.max(5, Math.min(1440, Number(event.target.value) || 60)))}
-                  />
-                </label>
+
+              {!locked && (
+                <div className="strict-body">
+                  <div className="strict-presets">
+                    {STRICT_PRESETS.map((p) => (
+                      <button
+                        key={p.value}
+                        className={`preset-btn ${strictLockMinutes === p.value ? "active" : ""}`}
+                        onClick={() => setStrictLockMinutes(p.value)}
+                        disabled={locked}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="strict-custom-row">
+                    <span className="muted">Custom:</span>
+                    <div className="strict-custom-input">
+                      <input
+                        type="number"
+                        min={0}
+                        value={Math.floor(strictLockMinutes / 60).toString()}
+                        disabled={locked}
+                        onChange={(e) => {
+                          const h = Math.max(0, Number(e.target.value) || 0);
+                          const m = strictLockMinutes % 60;
+                          setStrictLockMinutes(Math.max(1, h * 60 + m));
+                        }}
+                      />
+                      <span>h</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={59}
+                        value={(strictLockMinutes % 60).toString()}
+                        disabled={locked}
+                        onChange={(e) => {
+                          let m = Number(e.target.value) || 0;
+                          if (m > 59) m = 59;
+                          if (m < 0) m = 0;
+                          const h = Math.floor(strictLockMinutes / 60);
+                          setStrictLockMinutes(Math.max(1, h * 60 + m));
+                        }}
+                      />
+                      <span>m</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="strict-footer" style={{ gap: "10px" }}>
+                {locked && (
+                  <button
+                    className="secondary"
+                    disabled={breakActive || cooldownActive}
+                    onClick={() => {
+                      void window.focusApi.takeBreak(selectedProfile.id).then(async (nextState) => {
+                        setState(nextState);
+                        await refreshLight();
+                      });
+                    }}
+                  >
+                    {breakActive ? "Break Active" : cooldownActive ? "Break on Cooldown" : "Take 5m Break"}
+                  </button>
+                )}
                 <button
-                  className="primary"
-                  disabled={locked}
+                  className="primary lock-btn"
+                  disabled={locked || strictLockMinutes <= 0}
                   onClick={() =>
                     void window.focusApi.lockProfile(selectedProfile.id, strictLockMinutes).then(async (nextState) => {
                       setState(nextState);
@@ -705,7 +797,8 @@ function App() {
                     })
                   }
                 >
-                  Lock
+                  <Lock size={14} style={{ marginRight: 6 }} />
+                  {locked ? "Locked" : `Lock for ${strictLockMinutes >= 60 ? `${Math.floor(strictLockMinutes / 60)}h ${strictLockMinutes % 60 > 0 ? `${strictLockMinutes % 60}m` : ''}`.trim() : `${strictLockMinutes}m`}`}
                 </button>
               </div>
             </div>
@@ -743,6 +836,21 @@ function App() {
                 enabled: site.enabled,
                 disabledUntil: site.disabledUntil,
                 cooldownUntil: site.cooldownUntil,
+                limitMinutes: site.limitMinutes,
+                limitScope: site.limitScope,
+                onSetLimit: locked ? undefined : () => {
+                  setLimitPrompt({
+                    targetName: site.normalizedHost,
+                    defaultMinutes: site.limitMinutes,
+                    defaultScope: site.limitScope,
+                    onSave: (minutes, scope) => {
+                      void window.focusApi.saveBlockedSite({ ...site, limitMinutes: minutes, limitScope: scope }).then(async (nextState) => {
+                        setState(nextState);
+                        await refreshLight();
+                      });
+                    }
+                  });
+                },
                 onToggle: () =>
                   void window.focusApi.saveBlockedSite({ ...site, enabled: !site.enabled }).then(async (nextState) => {
                     setState(nextState);
@@ -834,6 +942,24 @@ function App() {
                 enabled: appRule.enabled,
                 disabledUntil: appRule.disabledUntil,
                 cooldownUntil: appRule.cooldownUntil,
+                limitMinutes: appRule.limitMinutes,
+                limitScope: appRule.limitScope,
+                onSetLimit: locked ? undefined : () => {
+                  setLimitPrompt({
+                    targetName: appRule.displayName,
+                    defaultMinutes: appRule.limitMinutes,
+                    defaultScope: appRule.limitScope,
+                    onSave: (minutes, scope) => {
+                      void (selectedProfile.appPolicy === "allowlist"
+                        ? window.focusApi.saveAllowedApp({ ...appRule, limitMinutes: minutes, limitScope: scope })
+                        : window.focusApi.saveBlockedApp({ ...appRule, limitMinutes: minutes, limitScope: scope })
+                      ).then(async (nextState) => {
+                        setState(nextState);
+                        await refreshLight();
+                      });
+                    }
+                  });
+                },
                 onToggle: () =>
                   void (selectedProfile.appPolicy === "allowlist"
                     ? window.focusApi.saveAllowedApp({ ...appRule, enabled: !appRule.enabled })
@@ -1009,6 +1135,18 @@ function App() {
           onConfirm={() => void runConfirmedAction()}
         />
       )}
+      {limitPrompt && (
+        <LimitPromptDialog
+          targetName={limitPrompt.targetName}
+          defaultMinutes={limitPrompt.defaultMinutes}
+          defaultScope={limitPrompt.defaultScope}
+          onCancel={() => setLimitPrompt(undefined)}
+          onSave={(minutes, scope) => {
+            limitPrompt.onSave(minutes, scope);
+            setLimitPrompt(undefined);
+          }}
+        />
+      )}
       {newProfileDraft && (
         <CreateProfileWizard
           draft={newProfileDraft}
@@ -1115,6 +1253,100 @@ function ConfirmationDialog({
           </button>
           <button className="danger" onClick={onConfirm}>
             {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function LimitPromptDialog({
+  targetName,
+  defaultMinutes,
+  defaultScope = "daily",
+  onCancel,
+  onSave
+}: {
+  targetName: string;
+  defaultMinutes?: number;
+  defaultScope?: "daily" | "hourly";
+  onCancel: () => void;
+  onSave: (minutes?: number, scope?: "daily" | "hourly") => void;
+}) {
+  const [minutes, setMinutes] = useState(defaultMinutes?.toString() || "");
+  const [scope, setScope] = useState<"daily" | "hourly">(defaultScope);
+
+  const presets = [
+    { label: "15m", value: 15 },
+    { label: "30m", value: 30 },
+    { label: "1h", value: 60 },
+    { label: "2h", value: 120 }
+  ];
+
+  return (
+    <div className="confirm-backdrop" role="presentation">
+      <section className="confirm-dialog limit-dialog" role="dialog" aria-modal="true">
+        <div>
+          <h2 style={{ marginBottom: "4px" }}>Set Usage Limit</h2>
+          <p style={{ color: "var(--text-tertiary)", fontSize: "13px", marginBottom: "16px" }}>Limit time on <strong>{targetName}</strong>.</p>
+          
+          <div className="segmented-control" style={{ marginBottom: "16px", display: "flex", background: "var(--surface-sunken)", padding: "4px", borderRadius: "8px" }}>
+            <button 
+              className={scope === "daily" ? "segment active" : "segment"} 
+              style={{ flex: 1, padding: "6px", border: "none", background: scope === "daily" ? "var(--surface)" : "transparent", borderRadius: "6px", boxShadow: scope === "daily" ? "var(--shadow-sm)" : "none", fontWeight: 600, fontSize: "13px" }}
+              onClick={() => setScope("daily")}
+            >
+              Daily
+            </button>
+            <button 
+              className={scope === "hourly" ? "segment active" : "segment"} 
+              style={{ flex: 1, padding: "6px", border: "none", background: scope === "hourly" ? "var(--surface)" : "transparent", borderRadius: "6px", boxShadow: scope === "hourly" ? "var(--shadow-sm)" : "none", fontWeight: 600, fontSize: "13px" }}
+              onClick={() => setScope("hourly")}
+            >
+              Hourly
+            </button>
+          </div>
+
+          <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+            {presets.map(p => (
+              <button 
+                key={p.label} 
+                className="secondary" 
+                style={{ flex: 1, padding: "6px 0", fontSize: "13px" }}
+                onClick={() => setMinutes(p.value.toString())}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          <input 
+            type="number" 
+            min={1}
+            value={minutes} 
+            onChange={(e) => setMinutes(e.target.value)} 
+            autoFocus 
+            placeholder="Custom limit (minutes)"
+            className="prompt-input"
+            style={{ marginTop: 0 }}
+            onKeyDown={(e) => { 
+              if (e.key === "Enter") {
+                const parsed = parseInt(minutes, 10);
+                onSave(isNaN(parsed) ? undefined : parsed, scope);
+              }
+            }}
+          />
+        </div>
+        <div className="confirm-actions" style={{ marginTop: "20px" }}>
+          <button className="secondary" onClick={() => onSave(undefined, undefined)} style={{ marginRight: "auto", color: "var(--danger)" }}>
+            Remove limit
+          </button>
+          <button className="secondary" onClick={onCancel}>Cancel</button>
+          <button className="primary" onClick={() => {
+            const parsed = parseInt(minutes, 10);
+            onSave(isNaN(parsed) ? undefined : parsed, scope);
+          }}>
+            Save
           </button>
         </div>
       </section>
@@ -1437,8 +1669,11 @@ function RuleTable({
     enabled: boolean;
     disabledUntil?: string;
     cooldownUntil?: string;
+    limitMinutes?: number;
+    limitScope?: "daily" | "hourly";
     onToggle: () => void;
     onDelete: () => void;
+    onSetLimit?: () => void;
   }>;
   empty: string;
   locked: boolean;
@@ -1459,6 +1694,15 @@ function RuleTable({
             <span>{row.meta}</span>
           </div>
           <div className="rule-toggles">
+            {row.onSetLimit && (
+              <button 
+                className="secondary" 
+                style={{ padding: "4px 8px", fontSize: "0.8em", marginRight: "8px" }} 
+                onClick={row.onSetLimit}
+              >
+                {row.limitMinutes ? `${row.limitMinutes}m ${row.limitScope || "daily"}` : "Set limit"}
+              </button>
+            )}
             {!row.enabled && row.disabledUntil && (
               <span className="countdown-text">
                 <Countdown until={row.disabledUntil} />
