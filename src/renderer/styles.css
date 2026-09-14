@@ -194,9 +194,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .sidebar-toggle svg {
   transition: transform var(--transition);
 }
-.sidebar.collapsed .sidebar-toggle svg {
-  /* Removed rotation for a cleaner look */
-}
+
 .brand-mark {
   width: 38px;
   height: 38px;
