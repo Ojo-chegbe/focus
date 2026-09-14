@@ -35,8 +35,10 @@ import type {
   Weekday,
   FocusSessionPreset
 } from "../shared/models";
-import type { SelectedAppExecutable } from "../shared/ipc";
+import type { SelectedAppExecutable, UpdateStatus } from "../shared/ipc";
 import { createId, isScheduleActive, isStrictLocked, normalizeDomain } from "../shared/rules";
+import { UninstallPuzzle } from "./UninstallPuzzle";
+import focusIcon from "./assets/icon.png";
 import "./styles.css";
 
 const weekdays: Array<{ value: Weekday; label: string }> = [
@@ -101,8 +103,43 @@ const SidebarIcon = ({ size = 20 }: { size?: number }) => (
   </svg>
 );
 
+const BreakButton = ({ profile, onTakeBreak }: { profile: Profile; onTakeBreak: () => void }) => {
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  
+  const breakActive = Boolean(profile.breakUntil && new Date(profile.breakUntil).getTime() > nowMs);
+  const cooldownActive = Boolean(profile.lastBreakAt && nowMs - new Date(profile.lastBreakAt).getTime() < 60 * 60_000);
+  
+  const formatTime = (ms: number) => {
+    const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+  
+  let label = "Take 5m Break";
+  if (breakActive) {
+    const remaining = new Date(profile.breakUntil!).getTime() - nowMs;
+    label = `Break: ${formatTime(remaining)}`;
+  } else if (cooldownActive) {
+    const remaining = new Date(profile.lastBreakAt!).getTime() + 60 * 60_000 - nowMs;
+    label = `Cooldown: ${formatTime(remaining)}`;
+  }
+  
+  return (
+    <button className="secondary" disabled={breakActive || cooldownActive} onClick={onTakeBreak}>
+      {label}
+    </button>
+  );
+};
+
 function App() {
-  const [view, setView] = useState<"dashboard" | "settings">("dashboard");
+  const [view, setView] = useState<"dashboard" | "settings" | "uninstall">(
+    () => new URLSearchParams(window.location.search).has("uninstall") ? "uninstall" : "dashboard"
+  );
   const [state, setState] = useState<AppState>();
   const [summary, setSummary] = useState<UsageSummary>();
   const [status, setStatus] = useState<HelperStatus>();
@@ -131,6 +168,8 @@ function App() {
     showPauseButton: true,
     presetName: ""
   });
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>();
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
   const selectedProfile = useMemo(
     () => state?.profiles.find((profile) => profile.id === selectedProfileId) ?? state?.profiles[0],
@@ -140,8 +179,30 @@ function App() {
   useEffect(() => {
     void refresh();
     const interval = window.setInterval(() => void refreshLight(), 5000);
-    return () => window.clearInterval(interval);
+    window.focusApi.getUpdateStatus().then(setUpdateStatus).catch(() => undefined);
+    const unsubscribe = window.focusApi.onUpdateStatus((nextStatus) => {
+      setUpdateStatus(nextStatus);
+      if (nextStatus.state !== "checking") {
+        setIsCheckingUpdate(false);
+      }
+    });
+    return () => {
+      window.clearInterval(interval);
+      unsubscribe();
+    };
   }, []);
+
+  const checkForUpdates = async () => {
+    setIsCheckingUpdate(true);
+    try {
+      const res = await window.focusApi.checkForUpdates();
+      setUpdateStatus(res);
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
 
   useEffect(() => {
     if (!selectedProfileId && state?.profiles[0]) setSelectedProfileId(state.profiles[0].id);
@@ -497,6 +558,10 @@ function App() {
     await refreshLight();
   }
 
+  if (view === "uninstall") {
+    return <UninstallPuzzle />;
+  }
+
   if (!state || !summary || !selectedProfile) {
     return (
       <main className="loading">
@@ -526,7 +591,7 @@ function App() {
       <aside className={sidebarCollapsed ? "sidebar collapsed" : "sidebar"}>
         <div className="brand">
           <div className="brand-mark">
-            <Shield size={18} />
+            <img src={focusIcon} alt="Focus Logo" />
           </div>
           <div className="brand-copy">
             <h1>Focus</h1>
@@ -549,16 +614,21 @@ function App() {
           <button className={`nav-button ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")}>
             <Settings size={16} />
             <span>Settings</span>
+            {updateStatus?.state === "downloaded" && <span className="nav-badge">Update</span>}
           </button>
         </div>
 
         <div className="helper-card">
           <div className="helper-title">
             {status?.lastError ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-            Helper
+            System Status
           </div>
-          <p>{status?.isElevated ? "Running with admin access" : "Needs admin for full site blocking"}</p>
-          <p>{status?.activeRules.activeProfileNames.join(", ") || "Everything’s quiet right now"}</p>
+          <p>{status?.isElevated ? "System-level blocking active" : "Grant admin access to block websites"}</p>
+          <p>
+            {status?.activeRules.activeProfileNames.length 
+              ? `Active: ${status.activeRules.activeProfileNames.join(", ")}` 
+              : "Everything’s quiet right now"}
+          </p>
           {status && !status.isElevated && (
             <button
               className="primary wide"
@@ -570,7 +640,7 @@ function App() {
           )}
           <button className="secondary wide" onClick={() => void window.focusApi.applyRules().then(setStatus)}>
             <RefreshCcw size={16} />
-            Apply rules
+            Sync rules
           </button>
         </div>
       </aside>
@@ -774,18 +844,15 @@ function App() {
 
               <div className="strict-footer" style={{ gap: "10px" }}>
                 {locked && (
-                  <button
-                    className="secondary"
-                    disabled={breakActive || cooldownActive}
-                    onClick={() => {
+                  <BreakButton
+                    profile={selectedProfile}
+                    onTakeBreak={() => {
                       void window.focusApi.takeBreak(selectedProfile.id).then(async (nextState) => {
                         setState(nextState);
                         await refreshLight();
                       });
                     }}
-                  >
-                    {breakActive ? "Break Active" : cooldownActive ? "Break on Cooldown" : "Take 5m Break"}
-                  </button>
+                  />
                 )}
                 <button
                   className="primary lock-btn"
@@ -1092,7 +1159,10 @@ function App() {
                     Launch at login
                   </label>
                   <label>
-                    Poll seconds
+                    <div style={{ marginBottom: "6px" }}>
+                      <div>Blocker check frequency (seconds)</div>
+                      <div className="muted" style={{ fontSize: "12px", fontWeight: "normal", marginTop: "2px" }}>How often the app checks for running blocked apps.</div>
+                    </div>
                     <input
                       type="number"
                       min={1}
@@ -1102,7 +1172,10 @@ function App() {
                     />
                   </label>
                   <label>
-                    Block page port
+                    <div style={{ marginBottom: "6px" }}>
+                      <div>Local server port</div>
+                      <div className="muted" style={{ fontSize: "12px", fontWeight: "normal", marginTop: "2px" }}>The port used to host the "Site Blocked" page in your browser.</div>
+                    </div>
                     <input
                       type="number"
                       min={1024}
@@ -1120,6 +1193,71 @@ function App() {
                     <Trash2 size={16} />
                     Reset data
                   </button>
+                </div>
+              </Panel>
+
+              <Panel title="App Updates" icon={<RefreshCcw size={18} />} className="span-2">
+                <div className="update-panel-content">
+                  <div className="update-info-row">
+                    <div>
+                      <strong>Current Version:</strong> v{updateStatus?.currentVersion || "0.1.0"}
+                    </div>
+                    {updateStatus?.version && (
+                      <div>
+                        <strong>Latest Available:</strong> v{updateStatus.version}
+                      </div>
+                    )}
+                  </div>
+                  <div className="update-status-row">
+                    {updateStatus?.state === "checking" && <span>Checking GitHub Releases for updates...</span>}
+                    {updateStatus?.state === "available" && (
+                      <span className="text-warn">Update v{updateStatus.version} available. Downloading in background...</span>
+                    )}
+                    {updateStatus?.state === "downloading" && (
+                      <div className="download-progress-container">
+                        <span>Downloading update: {updateStatus.progress ?? 0}%</span>
+                        <div className="progress-bar-bg">
+                          <div className="progress-bar-fill" style={{ width: `${updateStatus.progress ?? 0}%` }} />
+                        </div>
+                      </div>
+                    )}
+                    {updateStatus?.state === "downloaded" && (
+                      <div className="update-ready-box">
+                        <span className="text-success">
+                          Update v{updateStatus.version} is downloaded and ready to install!
+                        </span>
+                        <button
+                          className="primary"
+                          onClick={() => void window.focusApi.quitAndInstallUpdate()}
+                        >
+                          Restart & Install Update
+                        </button>
+                      </div>
+                    )}
+                    {updateStatus?.state === "not-available" && (
+                      <span className="text-muted">You are running the latest version of Focus.</span>
+                    )}
+                    {updateStatus?.state === "error" && (
+                      <span className="text-danger">
+                        {updateStatus.error?.includes("404")
+                          ? "GitHub repository or release not found (404). Please ensure the repository 'Ojo-chegbe/focus' is set to Public and has a published release."
+                          : updateStatus.error || "Failed to check for updates."}
+                      </span>
+                    )}
+                    {(!updateStatus || updateStatus.state === "idle") && (
+                      <span className="text-muted">Automatic updates are enabled via GitHub Releases.</span>
+                    )}
+                  </div>
+                  <div className="settings-actions">
+                    <button
+                      className="secondary"
+                      disabled={isCheckingUpdate || updateStatus?.state === "downloading"}
+                      onClick={() => void checkForUpdates()}
+                    >
+                      <RefreshCcw size={16} className={isCheckingUpdate ? "spin" : ""} />
+                      {isCheckingUpdate ? "Checking..." : "Check for updates"}
+                    </button>
+                  </div>
                 </div>
               </Panel>
             </section>

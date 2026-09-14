@@ -50,6 +50,28 @@ export interface AppApi {
   openHostsFile(): Promise<void>;
   relaunchAsAdmin(): Promise<void>;
   refreshFirefox(): Promise<HelperStatus>;
+  resumeUninstall(): Promise<void>;
+  getUpdateStatus(): Promise<UpdateStatus>;
+  checkForUpdates(): Promise<UpdateStatus>;
+  quitAndInstallUpdate(): Promise<void>;
+  onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
+}
+
+export type UpdateState =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error";
+
+export interface UpdateStatus {
+  state: UpdateState;
+  currentVersion: string;
+  version?: string;
+  progress?: number;
+  error?: string;
 }
 
 export interface SelectedAppExecutable {
@@ -93,5 +115,10 @@ export const channels = {
   saveSettings: "settings:save",
   openHostsFile: "hosts:open",
   relaunchAsAdmin: "app:relaunch-as-admin",
-  refreshFirefox: "browser:refresh-firefox"
+  refreshFirefox: "browser:refresh-firefox",
+  resumeUninstall: "app:resume-uninstall",
+  getUpdateStatus: "updater:get-status",
+  checkForUpdates: "updater:check",
+  quitAndInstallUpdate: "updater:quit-and-install",
+  onUpdateStatus: "updater:status-changed"
 } as const;

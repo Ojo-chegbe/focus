@@ -35,7 +35,18 @@ const api: AppApi = {
   saveSettings: (settings) => ipcRenderer.invoke(channels.saveSettings, settings),
   openHostsFile: () => ipcRenderer.invoke(channels.openHostsFile),
   relaunchAsAdmin: () => ipcRenderer.invoke(channels.relaunchAsAdmin),
-  refreshFirefox: () => ipcRenderer.invoke(channels.refreshFirefox)
+  refreshFirefox: () => ipcRenderer.invoke(channels.refreshFirefox),
+  resumeUninstall: () => ipcRenderer.invoke(channels.resumeUninstall),
+  getUpdateStatus: () => ipcRenderer.invoke(channels.getUpdateStatus),
+  checkForUpdates: () => ipcRenderer.invoke(channels.checkForUpdates),
+  quitAndInstallUpdate: () => ipcRenderer.invoke(channels.quitAndInstallUpdate),
+  onUpdateStatus: (callback) => {
+    const handler = (_: unknown, updateStatus: any) => callback(updateStatus);
+    ipcRenderer.on(channels.onUpdateStatus, handler);
+    return () => {
+      ipcRenderer.removeListener(channels.onUpdateStatus, handler);
+    };
+  }
 };
 
 contextBridge.exposeInMainWorld("focusApi", api);

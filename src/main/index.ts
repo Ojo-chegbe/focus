@@ -10,6 +10,8 @@ import { BlockPageServer } from "./blockPageServer";
 import { HostsBlocker } from "./hostsBlocker";
 import { FocusStore } from "./store";
 import { WindowsMonitor } from "./windowsMonitor";
+import { getAppIcon, getAppIconDataUrl, getAppIconPath } from "./appIcon";
+import { initAutoUpdater, getUpdateStatus, checkForUpdates, quitAndInstallUpdate } from "./autoUpdater";
 
 let mainWindow: BrowserWindow | undefined;
 let focusModeWindow: BrowserWindow | undefined;
@@ -22,6 +24,13 @@ let rulesRefreshTimer: NodeJS.Timeout | undefined;
 let isQuitting = false;
 
 const isDev = !app.isPackaged;
+
+app.setAppUserModelId("com.focus.desktop");
+
+if (isDev) {
+  app.setPath("userData", `${app.getPath("userData")}-dev`);
+}
+
 const execFileAsync = promisify(execFile);
 const launchTaskName = "FocusDesktop";
 const shouldQuitEarly = isDev ? false : !app.requestSingleInstanceLock();
@@ -31,12 +40,15 @@ if (shouldQuitEarly) {
 }
 
 function createWindow(): void {
+  const iconPath = getAppIconPath();
+  const appIcon = getAppIcon();
   mainWindow = new BrowserWindow({
     width: 1240,
     height: 820,
     minWidth: 980,
     minHeight: 680,
     title: "Focus",
+    icon: iconPath || (!appIcon.isEmpty() ? appIcon : undefined),
     backgroundColor: "#f8fafc",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -46,10 +58,18 @@ function createWindow(): void {
     }
   });
 
+  if (iconPath) {
+    mainWindow.setIcon(iconPath);
+  }
+
+  const isUninstall = process.argv.includes("--uninstall-challenge");
+
   if (isDev) {
-    void mainWindow.loadURL("http://127.0.0.1:5173");
+    void mainWindow.loadURL(`http://127.0.0.1:5173${isUninstall ? "?uninstall=true" : ""}`);
   } else {
-    void mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+    void mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"), {
+      search: isUninstall ? "uninstall=true" : undefined
+    });
   }
 
   mainWindow.on("close", (event) => {
@@ -70,8 +90,9 @@ function showMainWindow(): void {
 }
 
 function createTray(): void {
-  const icon = nativeImage.createEmpty();
-  tray = new Tray(icon);
+  const icon = getAppIcon();
+  const trayIcon = !icon.isEmpty() ? icon.resize({ width: 16, height: 16 }) : nativeImage.createEmpty();
+  tray = new Tray(trayIcon);
   tray.setToolTip("Focus");
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -135,6 +156,44 @@ function registerIpc(): void {
     await closeFirefox();
     return applyRulesAndRecord();
   });
+  ipcMain.handle(channels.resumeUninstall, async () => {
+    const fs = require("node:fs");
+    const programData = process.env.ALLUSERSPROFILE || process.env.ProgramData || "C:\\ProgramData";
+    const flagPaths = [
+      path.join(programData, "Focus", "uninstall-allowed.flag"),
+      path.join(programData, "focus-desktop", "uninstall-allowed.flag"),
+      path.join(app.getPath("userData"), "uninstall-allowed.flag"),
+      path.join(app.getPath("appData"), "Focus", "uninstall-allowed.flag"),
+      path.join(app.getPath("appData"), "focus-desktop", "uninstall-allowed.flag")
+    ];
+    for (const p of flagPaths) {
+      try {
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, "1", "utf-8");
+      } catch {
+        // Continue
+      }
+    }
+
+    const exeDir = path.dirname(process.execPath);
+    const uninstaller = path.join(exeDir, "Uninstall Focus.exe");
+    if (fs.existsSync(uninstaller)) {
+      try {
+        const { spawn } = require("node:child_process");
+        const child = spawn(uninstaller, [], { detached: true, stdio: "ignore" });
+        child.unref();
+      } catch {
+        shell.openPath(uninstaller);
+      }
+    }
+    isQuitting = true;
+    setTimeout(() => {
+      app.quit();
+    }, 500);
+  });
+  ipcMain.handle(channels.getUpdateStatus, () => getUpdateStatus());
+  ipcMain.handle(channels.checkForUpdates, () => checkForUpdates());
+  ipcMain.handle(channels.quitAndInstallUpdate, () => quitAndInstallUpdate());
 }
 
 async function selectAppExecutable() {
@@ -296,6 +355,8 @@ function syncFocusModeWindow(activeRules: ReturnType<typeof getActiveRules>): vo
   const isPaused = Boolean(session.paused);
   const canPause = !session.strict && session.showPauseButton !== false;
   const canEnd = !session.strict;
+  const iconDataUrl = getAppIconDataUrl();
+  const iconHtml = iconDataUrl ? `<img src="${iconDataUrl}" width="60" height="60" style="border-radius:14px;margin-bottom:12px;display:inline-block;" alt="Focus" />` : "";
   const html = `<!doctype html>
 <html><head><meta charset="utf-8" />
 <title>${title}</title>
@@ -307,7 +368,7 @@ h1{font-size:48px;margin:0 0 8px} p{color:#d1d5db} .grid{margin-top:22px;display
 .chip button{height:34px;border:0;border-radius:8px;background:#f8fafc;color:#111827;font-weight:700;cursor:pointer}
 .actions{display:flex;gap:10px;justify-content:center;margin-top:14px}
 .actions button{height:38px;padding:0 14px;border:0;border-radius:8px;background:#f8fafc;color:#111827;font-weight:700;cursor:pointer}
-</style></head><body><main><h1>Focus Session Active</h1><p>Session ends at ${endsAtLabel}</p><div class="grid">${
+</style></head><body><main>${iconHtml}<h1>Focus Session Active</h1><p>Session ends at ${endsAtLabel}</p><div class="grid">${
     allowedApps.length > 0
       ? allowedApps
           .map(
@@ -322,11 +383,13 @@ h1{font-size:48px;margin:0 0 8px} p{color:#d1d5db} .grid{margin-top:22px;display
     canPause ? `<button onclick="location.href='https://focus.local/action/${isPaused ? "resume" : "pause"}/${session.id}'">${isPaused ? "Resume" : "Pause"}</button>` : ""
   }${canEnd ? `<button onclick="location.href='https://focus.local/action/end/${session.id}'">End Session</button>` : ""}</div></main></body></html>`;
   if (!focusModeWindow || focusModeWindow.isDestroyed()) {
+    const appIcon = getAppIcon();
     focusModeWindow = new BrowserWindow({
       fullscreen: true,
       frame: false,
       alwaysOnTop: true,
       title: "Focus Mode",
+      icon: !appIcon.isEmpty() ? appIcon : undefined,
       webPreferences: { sandbox: true }
     });
     focusModeWindow.webContents.on("will-navigate", (event, url) => {
@@ -515,11 +578,22 @@ if (!shouldQuitEarly) {
     registerIpc();
     createWindow();
     createTray();
+    initAutoUpdater(() => mainWindow);
     void applyRulesAndRecord();
   });
 }
 
-app.on("second-instance", () => {
+app.on("second-instance", (_event, commandLine) => {
+  const isUninstall = commandLine.some((arg) => arg.includes("--uninstall-challenge"));
+  if (isUninstall && mainWindow && !mainWindow.isDestroyed()) {
+    if (isDev) {
+      void mainWindow.loadURL("http://127.0.0.1:5173?uninstall=true");
+    } else {
+      void mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"), {
+        search: "uninstall=true"
+      });
+    }
+  }
   showMainWindow();
 });
 

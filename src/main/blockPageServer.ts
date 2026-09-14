@@ -1,10 +1,14 @@
 import http from "node:http";
+import { getAppIconDataUrl } from "./appIcon";
 
 export class BlockPageServer {
   private serverByAddress = new Map<string, http.Server>();
 
   start(port: number): void {
     if (this.serverByAddress.size > 0) return;
+
+    const iconDataUrl = getAppIconDataUrl();
+    const iconHtml = iconDataUrl ? `<img src="${iconDataUrl}" width="64" height="64" style="border-radius:14px;margin-bottom:16px;display:inline-block;" alt="Focus" />` : "";
 
     const html = `<!doctype html>
 <html>
@@ -20,6 +24,7 @@ export class BlockPageServer {
 </head>
 <body>
   <main>
+    ${iconHtml}
     <h1>Blocked by Focus</h1>
     <p>This site is currently blocked by an active focus profile. Return to your planned task or adjust the profile when strict mode allows it.</p>
   </main>

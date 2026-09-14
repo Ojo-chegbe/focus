@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ActiveRules, AllowedApp, BlockedApp } from "../shared/models";
 import type { FocusStore } from "./store";
+import { getAppIcon, getAppIconDataUrl } from "./appIcon";
 
 const execFileAsync = promisify(execFile);
 
@@ -170,11 +171,16 @@ Add-Type -AssemblyName System.Windows.Forms
 
   private showBlockedWindow(appName: string): void {
     if (this.blockedWindow && !this.blockedWindow.isDestroyed()) return;
+    const appIcon = getAppIcon();
+    const iconDataUrl = getAppIconDataUrl();
+    const iconHtml = iconDataUrl ? `<img src="${iconDataUrl}" width="64" height="64" style="border-radius:14px;margin-bottom:16px;display:inline-block;" alt="Focus" />` : "";
+
     this.blockedWindow = new BrowserWindow({
       fullscreen: true,
       alwaysOnTop: true,
       frame: false,
       title: "Blocked by Focus",
+      icon: !appIcon.isEmpty() ? appIcon : undefined,
       webPreferences: { sandbox: true }
     });
     this.blockedWindow.loadURL(
@@ -190,6 +196,7 @@ Add-Type -AssemblyName System.Windows.Forms
 </head>
 <body>
   <main>
+    ${iconHtml}
     <h1>${escapeHtml(appName)} is blocked</h1>
     <p>An active Focus profile is preventing this app from being used right now.</p>
   </main>

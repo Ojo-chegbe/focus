@@ -150,6 +150,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 260px 1fr;
+  transition: grid-template-columns var(--transition-slow) ease-in-out;
 }
 
 .app-shell.sidebar-collapsed {
@@ -170,6 +171,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   flex-direction: column;
   gap: 6px;
   border-right: 1px solid rgba(255,255,255,0.06);
+  transition: padding var(--transition-slow) ease-in-out;
+}
+.sidebar.collapsed {
+  padding: 20px 12px;
 }
 .sidebar::-webkit-scrollbar { width: 0; }
 
@@ -179,28 +184,40 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   align-items: center;
   padding: 4px 8px;
   margin-bottom: 16px;
+  transition: all var(--transition-slow) ease-in-out;
 }
 
 .sidebar-toggle {
   margin-left: auto;
+  transition: margin var(--transition-slow) ease-in-out;
 }
 .sidebar-toggle svg {
   transition: transform var(--transition);
 }
 .sidebar.collapsed .sidebar-toggle svg {
-  transform: rotate(90deg);
+  /* Removed rotation for a cleaner look */
 }
 .brand-mark {
   width: 38px;
   height: 38px;
   display: grid;
   place-items: center;
-  background: var(--primary);
   border-radius: var(--radius-sm);
-  color: #fff;
+  overflow: hidden;
   flex-shrink: 0;
 }
-.brand h1, .brand p { margin: 0; }
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+.brand h1, .brand p { margin: 0; white-space: nowrap; }
+.brand-copy {
+  overflow: hidden;
+  transition: opacity 0.2s;
+}
 .brand h1 {
   font-size: 18px;
   font-weight: 800;
@@ -231,6 +248,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-size: 13.5px;
   text-align: left;
   transition: all var(--transition);
+  overflow: hidden;
+  white-space: nowrap;
 }
 .nav-button:hover:not(:disabled) {
   background: var(--sidebar-surface);
@@ -251,7 +270,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 
 .sidebar.collapsed .brand {
   padding: 4px 0;
-  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 
 .sidebar.collapsed .sidebar-toggle {
@@ -261,6 +282,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .sidebar.collapsed .nav-button {
   justify-content: center;
   padding: 0;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
 }
 
 /* ── Helper Card ── */
@@ -1334,3 +1358,76 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   border-radius: 3px;
 }
 .workspace::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+
+/* ── Updates Panel ── */
+.nav-badge {
+  margin-left: auto;
+  padding: 2px 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  border-radius: 9999px;
+  background: var(--success);
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+.update-panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.update-info-row {
+  display: flex;
+  gap: 24px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.update-info-row strong {
+  color: var(--text);
+}
+
+.update-status-row {
+  padding: 12px 14px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+}
+
+.download-progress-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progress-bar-bg {
+  width: 100%;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 4px;
+  transition: width 200ms ease;
+}
+
+.update-ready-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
